@@ -1,6 +1,49 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ article.title or "(untitled)" }}</h1>
+{% if added %}<div class="banner ok">Added to the library.</div>{% endif %}
+{% if existing %}
+<div class="banner info">
+  This paper is already in the library.
+  {% if pdf_attached %}Your PDF was attached to the existing record.{% endif %}
+</div>
+{% endif %}
+{% if rescanned >= 0 %}
+<div class="banner {{ 'ok' if rescanned else 'info' }}">
+  {% if rescanned %}
+    PDF rescanned — {{ rescanned }} keyword{{ "s" if rescanned != 1 }} linked as topics.
+  {% else %}
+    PDF rescanned — no keywords found in its metadata or first pages.
+  {% endif %}
+</div>
+{% endif %}
+{% if similar %}
+<div class="banner warn">
+  Possible duplicate — similar titles already in the library:
+  {% for match in similar %}
+    <a href="/articles/{{ match.article_id }}">{{ match.title }}</a>{% if not loop.last %}, {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+<h1>{{ article.title or article.doi or "(untitled)" }}</h1>
+
+{% if article.status == "pending" %}
+<div class="banner info" id="processing">Fetching metadata from Crossref&hellip;</div>
+<script>
+  (function poll() {
+    fetch("/api/articles/{{ article.id }}")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.status !== "pending") { location.replace("/articles/{{ article.id }}"); }
+        else { setTimeout(poll, 1500); }
+      })
+      .catch(function () { setTimeout(poll, 3000); });
+  })();
+</script>
+{% elif article.status == "metadata_failed" %}
+<div class="banner warn">Metadata lookup failed for this DOI. The record was kept; try re-adding it later.</div>
+{% endif %}
+
 <p>
   {% for author in article.authors %}{{ author.full_name }}{% if not loop.last %}, {% endif %}{% endfor %}
 </p>
@@ -9,11 +52,15 @@
   {% if article.doi %}<dt>DOI</dt><dd><a href="https://doi.org/{{ article.doi }}">{{ article.doi }}</a></dd>{% endif %}
   {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
   {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
-  <dt>Status</dt><dd>{{ article.status }}</dd>
 </dl>
 {% if article.abstract %}<h2>Abstract</h2><p>{{ article.abstract }}</p>{% endif %}
 <p>
   {% if article.pdf_path %}<a href="/articles/{{ article.id }}/pdf">Download PDF</a> · {% endif %}
   <a href="/articles/{{ article.id }}/bibtex">Download BibTeX</a>
 </p>
+{% if article.pdf_path %}
+<form action="/articles/{{ article.id }}/rescan" method="post">
+  <button type="submit">Rescan PDF for keywords</button>
+</form>
+{% endif %}
 {% endblock %}

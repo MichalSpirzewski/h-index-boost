@@ -1,15 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Recent additions</h1>
+<p class="sort">
+  Sort by:
+  {% if sort == "author" %}
+    <a href="/">date added</a> · <strong>author</strong>
+  {% else %}
+    <strong>date added</strong> · <a href="/?sort=author">author</a>
+  {% endif %}
+</p>
 {% if articles %}
 <table>
   <thead>
-    <tr><th>Title</th><th>Year</th><th>Journal</th><th>Status</th></tr>
+    <tr><th>Title</th><th>Authors</th><th>Year</th><th>Journal</th><th>Status</th></tr>
   </thead>
   <tbody>
     {% for article in articles %}
     <tr>
-      <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td>
+        <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
+        {% if article.topics %}
+        <div class="chips">
+          {% for topic in article.topics[:5] %}<span class="chip">{{ topic.name }}</span>{% endfor %}
+          {% if article.topics | length > 5 %}<span class="chip">+{{ article.topics | length - 5 }}</span>{% endif %}
+        </div>
+        {% endif %}
+      </td>
+      <td>
+        {%- set authors = article.authors -%}
+        {%- for author in authors[:3] -%}
+          {{ author.full_name }}{% if not loop.last %}, {% endif %}
+        {%- endfor -%}
+        {%- if authors | length > 3 %} et al.{% endif -%}
+      </td>
       <td>{{ article.year or "" }}</td>
       <td>{{ article.journal or "" }}</td>
       <td>{{ article.status }}</td>

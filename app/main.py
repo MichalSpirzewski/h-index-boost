@@ -1,15 +1,15 @@
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app import bibtex, db, ingest
-from app.models import Article
+from app.models import Article, ArticleAuthor
 
 app = FastAPI(title="RefBase")
 
@@ -31,10 +31,16 @@ def _clean(value: str | None) -> str | None:
     return value or None
 
 
+def _wants_html(request: Request) -> bool:
+    """Browser form posts accept text/html; API clients get JSON."""
+    return "text/html" in request.headers.get("accept", "")
+
+
 # --------------------------------------------------------------------------- ingest API
 
 @app.post("/api/ingest")
 async def ingest_endpoint(
+    request: Request,
     background_tasks: BackgroundTasks,
     session: Session = Depends(db.get_db),
     file: UploadFile | None = File(None),
@@ -60,22 +66,36 @@ async def ingest_endpoint(
     if resolved:
         existing = session.scalar(select(Article).where(Article.doi == resolved))
         if existing:
-            return _duplicate_response(session, background_tasks, existing, pdf_bytes)
+            result = _duplicate_response(session, background_tasks, existing, pdf_bytes)
+            if _wants_html(request):
+                return RedirectResponse(
+                    f"{result['url']}?existing=1&pdf_attached={int(result['pdf_attached'])}",
+                    status_code=303,
+                )
+            return result
 
         article = Article(
             doi=resolved, title=title, source_url=url, added_by=added_by, status="pending"
         )
-        if pdf_bytes:
-            article.pdf_path = ingest.save_pdf(pdf_bytes, resolved)
         session.add(article)
         try:
             session.commit()
         except IntegrityError:  # lost a race on the UNIQUE(doi) constraint
             session.rollback()
             existing = session.scalar(select(Article).where(Article.doi == resolved))
-            return _duplicate_response(session, background_tasks, existing, pdf_bytes)
+            result = _duplicate_response(session, background_tasks, existing, pdf_bytes)
+            if _wants_html(request):
+                return RedirectResponse(
+                    f"{result['url']}?existing=1&pdf_attached={int(result['pdf_attached'])}",
+                    status_code=303,
+                )
+            return result
 
+        if pdf_bytes:
+            ingest.attach_pdf(session, article, pdf_bytes)
         background_tasks.add_task(ingest.process_article, article.id)
+        if _wants_html(request):
+            return RedirectResponse(f"/articles/{article.id}?added=1", status_code=303)
         return {"status": "created", "article_id": article.id, "doi": resolved,
                 "processing": True, "warnings": []}
 
@@ -90,10 +110,13 @@ async def ingest_endpoint(
     article = Article(
         title=stub_title, source_url=url, added_by=added_by, status="ready"
     )
-    if pdf_bytes:
-        article.pdf_path = ingest.save_pdf(pdf_bytes, None)
     session.add(article)
     session.commit()
+    if pdf_bytes:
+        ingest.attach_pdf(session, article, pdf_bytes)
+    if _wants_html(request):
+        suffix = "&check_dup=1" if warnings else ""
+        return RedirectResponse(f"/articles/{article.id}?added=1{suffix}", status_code=303)
     return {"status": "created", "article_id": article.id, "doi": None,
             "processing": False, "warnings": warnings}
 
@@ -106,8 +129,7 @@ def _duplicate_response(
 ):
     pdf_attached = False
     if pdf_bytes and not existing.pdf_path:
-        existing.pdf_path = ingest.save_pdf(pdf_bytes, existing.doi)
-        session.commit()
+        ingest.attach_pdf(session, existing, pdf_bytes)
         pdf_attached = True
     if existing.status == "metadata_failed" and not existing.crossref_json:
         background_tasks.add_task(ingest.process_article, existing.id)
@@ -119,6 +141,35 @@ def _duplicate_response(
         "detail": "Article is already in the library.",
         "url": f"/articles/{existing.id}",
     }
+
+
+@app.post("/articles/{article_id}/rescan")
+def rescan_article(
+    request: Request, article_id: int, session: Session = Depends(db.get_db)
+):
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+    keywords = ingest.rescan_article_pdf(session, article)
+    if _wants_html(request):
+        return RedirectResponse(
+            f"/articles/{article_id}?rescanned={len(keywords)}", status_code=303
+        )
+    return {"article_id": article_id, "keywords": keywords}
+
+
+@app.post("/api/rescan-pdfs")
+def rescan_all_pdfs(session: Session = Depends(db.get_db)):
+    """Re-run the keyword scrub over every stored PDF in the library."""
+    articles = session.scalars(
+        select(Article).where(Article.pdf_path.is_not(None), Article.hidden.is_(False))
+    ).all()
+    found = {}
+    for article in articles:
+        keywords = ingest.rescan_article_pdf(session, article)
+        if keywords:
+            found[article.id] = keywords
+    return {"pdfs_scanned": len(articles), "articles_with_keywords": found}
 
 
 @app.get("/api/articles/{article_id}")
@@ -142,12 +193,30 @@ def article_status(article_id: int, session: Session = Depends(db.get_db)):
 # --------------------------------------------------------------------------- pages (minimal until M2)
 
 @app.get("/")
-def index(request: Request, session: Session = Depends(db.get_db)):
-    articles = session.scalars(
-        select(Article).where(Article.hidden.is_(False))
-        .order_by(Article.created_at.desc()).limit(20)
-    ).all()
-    return templates.TemplateResponse(request, "index.html", {"articles": articles})
+def index(request: Request, session: Session = Depends(db.get_db), sort: str = "recent"):
+    articles = list(
+        session.scalars(
+            select(Article)
+            .where(Article.hidden.is_(False))
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+                selectinload(Article.topics),
+            )
+            .order_by(Article.created_at.desc())
+            .limit(20)
+        )
+    )
+    if sort == "author":
+        def first_author_surname(article: Article) -> tuple[int, str]:
+            if not article.author_links:
+                return (1, "")  # articles without authors sort last
+            tokens = article.author_links[0].author.full_name.split()
+            return (0, tokens[-1].lower() if tokens else "")
+
+        articles.sort(key=first_author_surname)
+    return templates.TemplateResponse(
+        request, "index.html", {"articles": articles, "sort": sort}
+    )
 
 
 @app.get("/upload")
@@ -155,12 +224,52 @@ def upload_page(request: Request):
     return templates.TemplateResponse(request, "upload.html", {})
 
 
+@app.get("/search")
+def search_page(request: Request, session: Session = Depends(db.get_db), q: str = ""):
+    results = []
+    if q.strip():
+        for article_id, snippet in db.search_articles(session, q):
+            article = session.get(Article, article_id)
+            if article and not article.hidden:
+                results.append({"article": article, "snippet": snippet})
+    return templates.TemplateResponse(
+        request, "search.html", {"q": q, "results": results}
+    )
+
+
 @app.get("/articles/{article_id}")
-def article_detail(request: Request, article_id: int, session: Session = Depends(db.get_db)):
+def article_detail(
+    request: Request,
+    article_id: int,
+    session: Session = Depends(db.get_db),
+    added: int = 0,
+    existing: int = 0,
+    pdf_attached: int = 0,
+    check_dup: int = 0,
+    rescanned: int = -1,
+):
     article = session.get(Article, article_id)
     if article is None or article.hidden:
         raise HTTPException(status_code=404, detail="Article not found")
-    return templates.TemplateResponse(request, "article.html", {"article": article})
+    similar = []
+    if check_dup and article.title:
+        similar = [
+            match
+            for match in ingest.find_similar_titles(session, article.title)
+            if match["article_id"] != article.id
+        ]
+    return templates.TemplateResponse(
+        request,
+        "article.html",
+        {
+            "article": article,
+            "added": added,
+            "existing": existing,
+            "pdf_attached": pdf_attached,
+            "similar": similar,
+            "rescanned": rescanned,
+        },
+    )
 
 
 @app.get("/articles/{article_id}/bibtex", response_class=PlainTextResponse)

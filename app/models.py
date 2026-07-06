@@ -21,6 +21,7 @@ class Article(Base):
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
     crossref_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pdf_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     added_by: Mapped[str | None] = mapped_column(String, nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")  # pending/ready/metadata_failed

@@ -6,10 +6,32 @@ body {
   line-height: 1.5;
   color: #222;
 }
-nav { display: flex; gap: 1rem; border-bottom: 1px solid #ddd; padding-bottom: 0.75rem; margin-bottom: 1.5rem; }
+nav { display: flex; gap: 1rem; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 0.75rem; margin-bottom: 1.5rem; }
 nav a { text-decoration: none; color: #0a5; }
+.searchbox { margin-left: auto; display: flex; gap: 0.35rem; }
+.searchbox input { padding: 0.3rem 0.5rem; min-width: 16rem; }
+.results { list-style: none; padding: 0; }
+.results li { margin-bottom: 1rem; }
+.snippet { margin: 0.2rem 0 0; color: #555; font-size: 0.9rem; }
+mark { background: #ffe58a; padding: 0 0.1rem; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
 form label { display: block; margin: 0.75rem 0; }
 form input[type="text"] { width: 100%; max-width: 30rem; padding: 0.35rem; }
 button { padding: 0.5rem 1rem; }
+.sort { color: #666; font-size: 0.9rem; }
+.chips { margin-top: 0.2rem; }
+.chip {
+  display: inline-block;
+  background: #eef2f7;
+  color: #445;
+  border-radius: 999px;
+  padding: 0 0.55rem;
+  font-size: 0.75rem;
+  margin: 0 0.25rem 0.15rem 0;
+  white-space: nowrap;
+}
+.banner { padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+.banner.ok { background: #e6f6ea; border: 1px solid #9ad2a8; }
+.banner.info { background: #e8f1fb; border: 1px solid #9dc0e8; }
+.banner.warn { background: #fdf3e0; border: 1px solid #e8c98a; }

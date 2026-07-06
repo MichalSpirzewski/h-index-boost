@@ -61,6 +61,31 @@ def test_ingest_without_doi_creates_stub_with_fuzzy_warning(client) -> None:
     assert body["warnings"][0]["matches"][0]["title"] == "Deep Learning for Cats and Dogs"
 
 
+def test_browser_form_post_redirects_to_article_page(client) -> None:
+    resp = client.post(
+        "/api/ingest",
+        data={"doi": "10.1038/nphys1170"},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    location = resp.headers["location"]
+    assert location.startswith("/articles/")
+
+    page = client.get(location)
+    assert page.status_code == 200
+    assert "Added to the library" in page.text
+
+    # duplicate submission from a browser redirects to the existing record
+    resp = client.post(
+        "/api/ingest",
+        data={"doi": "10.1038/nphys1170"},
+        headers={"accept": "text/html"},
+        follow_redirects=True,
+    )
+    assert "already in the library" in resp.text
+
+
 def test_ingest_rejects_empty_submission(client) -> None:
     resp = client.post("/api/ingest", data={"doi": "  "})
     assert resp.status_code == 422

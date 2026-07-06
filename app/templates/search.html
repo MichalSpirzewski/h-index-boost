@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Search</h1>
+{% if not q.strip() %}
+<p>Type a query above to search titles, abstracts, journals and the full text of stored PDFs.</p>
+{% elif results %}
+<p class="sort">{{ results | length }} result{{ "s" if results | length != 1 }} for “{{ q }}”</p>
+<ul class="results">
+  {% for hit in results %}
+  <li>
+    <a href="/articles/{{ hit.article.id }}">{{ hit.article.title or hit.article.doi or "(untitled)" }}</a>
+    {% if hit.article.year %}<span class="sort">({{ hit.article.year }})</span>{% endif %}
+    {% if hit.article.pdf_path %}<span class="chip">PDF</span>{% endif %}
+    <p class="snippet">{{ hit.snippet }}</p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No matches for “{{ q }}”.</p>
+{% endif %}
+{% endblock %}

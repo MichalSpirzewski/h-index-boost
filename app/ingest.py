@@ -9,6 +9,7 @@ import json
 import os
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 import fitz  # PyMuPDF
@@ -89,6 +90,65 @@ def pdf_title(pdf_bytes: bytes) -> str | None:
             return title or None
     except Exception:
         return None
+
+
+_MAX_PDF_TEXT = 500_000  # chars; keeps the FTS index bounded for scanned monsters
+
+
+def extract_pdf_text(pdf_bytes: bytes) -> str | None:
+    """Full text of every page, for the FTS index."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return None
+    with doc:
+        full_text = "\n".join(page.get_text() for page in doc).strip()
+    return full_text[:_MAX_PDF_TEXT] or None
+
+
+# --------------------------------------------------------------------------- keywords
+
+_KEYWORD_LINE_RE = re.compile(
+    r"^[ \t]*key\s*words?\s*[:\-—–][ \t]*(.+)$", re.IGNORECASE | re.MULTILINE
+)
+_MAX_KEYWORDS = 10
+_MAX_KEYWORD_LEN = 60
+
+
+def split_keywords(raw: str) -> list[str]:
+    """Split an author-keyword string on common separators; dedupe case-insensitively."""
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[;,·•]", raw):
+        keyword = part.strip().rstrip(".").strip()
+        if not keyword or len(keyword) > _MAX_KEYWORD_LEN:
+            continue
+        if keyword.lower() in seen:
+            continue
+        seen.add(keyword.lower())
+        keywords.append(keyword)
+    return keywords[:_MAX_KEYWORDS]
+
+
+def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
+    """Author keywords from PDF metadata, else from a 'Keywords: ...' line up front."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return []
+    with doc:
+        meta = (doc.metadata.get("keywords") or "").strip()
+        if meta:
+            keywords = split_keywords(meta)
+            if keywords:
+                return keywords
+        for page in doc.pages(0, min(2, doc.page_count)):
+            match = _KEYWORD_LINE_RE.search(page.get_text())
+            if match:
+                keywords = split_keywords(match.group(1))
+                if keywords:
+                    return keywords
+    return []
 
 
 # --------------------------------------------------------------------------- storage
@@ -255,6 +315,37 @@ def apply_semantic_scholar(session: Session, article: Article, data: dict[str, A
         _link_topic(session, article, field)
 
 
+def add_pdf_keywords(session: Session, article: Article, pdf_bytes: bytes) -> list[str]:
+    """Extract author keywords from an uploaded PDF and link them as topics."""
+    keywords = extract_keywords_from_pdf(pdf_bytes)
+    for keyword in keywords:
+        _link_topic(session, article, keyword)
+    if keywords:
+        session.commit()
+    return keywords
+
+
+def attach_pdf(session: Session, article: Article, pdf_bytes: bytes) -> None:
+    """Store a PDF for an article: file on disk, full text for search, keywords as topics."""
+    article.pdf_path = save_pdf(pdf_bytes, article.doi)
+    article.pdf_text = extract_pdf_text(pdf_bytes)
+    session.commit()
+    add_pdf_keywords(session, article, pdf_bytes)
+
+
+def rescan_article_pdf(session: Session, article: Article) -> list[str]:
+    """Re-run the scrub on an already-stored PDF: refresh full text, link keywords."""
+    if not article.pdf_path:
+        return []
+    try:
+        pdf_bytes = Path(article.pdf_path).read_bytes()
+    except OSError:
+        return []
+    article.pdf_text = extract_pdf_text(pdf_bytes)
+    session.commit()
+    return add_pdf_keywords(session, article, pdf_bytes)
+
+
 # --------------------------------------------------------------------------- duplicates
 
 def find_similar_titles(
@@ -308,7 +399,7 @@ def process_article(article_id: int) -> None:
                 if oa_url:
                     pdf_bytes = download_pdf(oa_url)
                     if pdf_bytes:
-                        article.pdf_path = save_pdf(pdf_bytes, article.doi)
+                        attach_pdf(session, article, pdf_bytes)
         except Exception:
             pass
 

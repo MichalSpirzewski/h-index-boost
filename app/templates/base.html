@@ -10,6 +10,11 @@
   <nav>
     <a href="/"><strong>RefBase</strong></a>
     <a href="/upload">Add paper</a>
+    <form action="/search" method="get" class="searchbox">
+      <input type="search" name="q" placeholder="Search titles, abstracts &amp; PDFs&hellip;"
+             value="{{ request.query_params.get('q', '') }}">
+      <button type="submit">Search</button>
+    </form>
   </nav>
   <main>
     {% block content %}{% endblock %}
