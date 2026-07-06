@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ article.title or "(untitled)" }}</h1>
+<p>
+  {% for author in article.authors %}{{ author.full_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+</p>
+<dl>
+  {% if article.journal %}<dt>Journal</dt><dd>{{ article.journal }}{% if article.year %} ({{ article.year }}){% endif %}</dd>{% endif %}
+  {% if article.doi %}<dt>DOI</dt><dd><a href="https://doi.org/{{ article.doi }}">{{ article.doi }}</a></dd>{% endif %}
+  {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+  {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
+  <dt>Status</dt><dd>{{ article.status }}</dd>
+</dl>
+{% if article.abstract %}<h2>Abstract</h2><p>{{ article.abstract }}</p>{% endif %}
+<p>
+  {% if article.pdf_path %}<a href="/articles/{{ article.id }}/pdf">Download PDF</a> · {% endif %}
+  <a href="/articles/{{ article.id }}/bibtex">Download BibTeX</a>
+</p>
+{% endblock %}

@@ -1,0 +1,23 @@
+{
+  "DOI": "10.1038/nphys1170",
+  "type": "journal-article",
+  "title": ["Measured measurement"],
+  "container-title": ["Nature Physics"],
+  "issued": {"date-parts": [[2009, 4]]},
+  "author": [
+    {
+      "given": "Alice B.",
+      "family": "Smith",
+      "ORCID": "http://orcid.org/0000-0002-1825-0097",
+      "sequence": "first"
+    },
+    {"given": "Carol", "family": "Danvers", "sequence": "additional"}
+  ],
+  "volume": "5",
+  "issue": "4",
+  "page": "243-244",
+  "publisher": "Springer Nature",
+  "subject": ["Physics and Astronomy"],
+  "abstract": "<jats:p>Quantum measurement &amp; its 100% weird consequences.</jats:p>",
+  "URL": "http://dx.doi.org/10.1038/nphys1170"
+}

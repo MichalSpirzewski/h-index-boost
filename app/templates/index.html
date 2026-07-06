@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recent additions</h1>
+{% if articles %}
+<table>
+  <thead>
+    <tr><th>Title</th><th>Year</th><th>Journal</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    {% for article in articles %}
+    <tr>
+      <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td>{{ article.year or "" }}</td>
+      <td>{{ article.journal or "" }}</td>
+      <td>{{ article.status }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No articles yet. <a href="/upload">Add the first one.</a></p>
+{% endif %}
+{% endblock %}

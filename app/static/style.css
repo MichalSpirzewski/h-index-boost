@@ -1,0 +1,15 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 64rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.5;
+  color: #222;
+}
+nav { display: flex; gap: 1rem; border-bottom: 1px solid #ddd; padding-bottom: 0.75rem; margin-bottom: 1.5rem; }
+nav a { text-decoration: none; color: #0a5; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
+form label { display: block; margin: 0.75rem 0; }
+form input[type="text"] { width: 100%; max-width: 30rem; padding: 0.35rem; }
+button { padding: 0.5rem 1rem; }

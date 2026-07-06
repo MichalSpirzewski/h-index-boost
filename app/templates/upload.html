@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Add a paper</h1>
+<p>Provide any combination of PDF, link, or DOI.</p>
+<form action="/api/ingest" method="post" enctype="multipart/form-data">
+  <label>PDF file <input type="file" name="file" accept="application/pdf"></label>
+  <label>URL or DOI link <input type="text" name="url" placeholder="https://doi.org/10.1038/..."></label>
+  <label>Raw DOI <input type="text" name="doi" placeholder="10.1038/nphys1170"></label>
+  <label>Title (only needed if no DOI) <input type="text" name="title"></label>
+  <label>Your name <input type="text" name="added_by" id="added_by"></label>
+  <button type="submit">Add to library</button>
+</form>
+<script>
+  /* remember "your name" locally; sent as added_by */
+  const field = document.getElementById("added_by");
+  field.value = localStorage.getItem("refbase_added_by") || "";
+  field.form.addEventListener("submit", () => localStorage.setItem("refbase_added_by", field.value));
+</script>
+{% endblock %}
