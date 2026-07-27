@@ -20,6 +20,17 @@ templates = Jinja2Templates(directory=_BASE_DIR / "templates")
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
 
 
+def _short_author_name(full_name: str) -> str:
+    """'Michał Spirzewski' -> 'M. Spirzewski'; single-token names unchanged."""
+    parts = full_name.split()
+    if len(parts) < 2:
+        return full_name
+    return f"{parts[0][0]}. {parts[-1]}"
+
+
+templates.env.filters["short_name"] = _short_author_name
+
+
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
@@ -79,7 +90,12 @@ async def ingest_endpoint(
         pdf_bytes = await file.read()
 
     if not (pdf_bytes or url or doi or title):
-        raise HTTPException(status_code=422, detail="Provide a PDF, a URL, or a DOI.")
+        message = "Nothing to add — provide a PDF, a URL, or a DOI."
+        if _wants_html(request):  # re-render the form with the error + a return button
+            return templates.TemplateResponse(
+                request, "upload.html", {"error": message}, status_code=422
+            )
+        raise HTTPException(status_code=422, detail=message)
 
     # Resolve DOI: raw input -> URL -> PDF text/metadata.
     resolved = ingest.extract_doi(doi) or ingest.extract_doi(url)
@@ -355,6 +371,7 @@ def author_detail(
     saved: int = 0,
     sort: str = "recent",
     order: str = "",
+    topic: int | None = None,
 ):
     author = session.get(Author, author_id)
     if author is None:
@@ -377,6 +394,7 @@ def author_detail(
     co_authors: dict[int, Author] = {}
     joint_counts: dict[int, int] = {}
     topics = {}
+    topic_counts: dict[int, int] = {}
     # Ordered de-dup of this author's affiliations, keyed so near-identical strings
     # (same text bar case/diacritics/punctuation — PDF encoding noise) collapse.
     affiliations: dict[str, str] = {}
@@ -394,13 +412,20 @@ def author_detail(
                         affiliations.setdefault(key, display)
                         if key == _NCNR_PHRASE:
                             is_ncbj = True
-        for topic in article.topics:
-            topics[topic.id] = topic
+        for art_topic in article.topics:
+            topics[art_topic.id] = art_topic
+            topic_counts[art_topic.id] = topic_counts.get(art_topic.id, 0) + 1
     # Most frequent collaborators first, then alphabetical.
     co_author_stats = sorted(
         ((co_authors[cid], joint_counts[cid]) for cid in co_authors),
         key=lambda pair: (-pair[1], pair[0].full_name),
     )
+
+    # Optional keyword/topic filter — narrows only the publications table below,
+    # leaving the co-author / affiliation / topic summaries computed over all papers.
+    active_topic = topics.get(topic) if topic is not None else None
+    if active_topic is not None:
+        articles = [a for a in articles if any(t.id == active_topic.id for t in a.topics)]
 
     # Sortable publications table (clickable headers). Default: newest first.
     if sort not in _PUB_SORT_KEYS:
@@ -419,7 +444,12 @@ def author_detail(
             "order": order,
             "co_author_stats": co_author_stats,
             "affiliations": list(affiliations.values()),
-            "topics": sorted(topics.values(), key=lambda t: t.name),
+            # (topic, count) pairs — most-used keyword first, then alphabetical.
+            "topic_stats": sorted(
+                ((topics[tid], topic_counts[tid]) for tid in topics),
+                key=lambda pair: (-pair[1], pair[0].name),
+            ),
+            "active_topic": active_topic,
             "is_ncbj": is_ncbj,
             "contact": contacts.get(author.id) if is_ncbj else {},
             "contact_saved": bool(saved),

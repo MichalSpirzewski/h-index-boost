@@ -24,6 +24,25 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee
   .wide-table { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0; }
 }
 form label { display: block; margin: 0.75rem 0; }
+/* Drag-and-drop PDF picker */
+.dropzone {
+  border: 2px dashed #ccd6e0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 1.5rem 1rem;
+  text-align: center;
+  color: #556;
+  cursor: pointer;
+  margin: 0.25rem 0 0.75rem;
+  max-width: 30rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover, .dropzone:focus { border-color: #1a4d8f; outline: none; }
+.dropzone.dragover { border-color: #1a4d8f; background: #eaf1fb; color: #1a4d8f; }
+.dropzone.has-file { border-style: solid; border-color: #1c6b3a; background: #f0f8f2; }
+.dropzone .dz-prompt { margin: 0; }
+.dropzone .dz-browse { color: #1a4d8f; text-decoration: underline; }
+.dropzone .dz-file { margin: 0.5rem 0 0; font-size: 0.9rem; color: #1c6b3a; font-weight: 600; }
 form input[type="text"] { width: 100%; max-width: 30rem; padding: 0.35rem; }
 button { padding: 0.5rem 1rem; }
 .sort { color: #666; font-size: 0.9rem; }
@@ -183,3 +202,6 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
 .banner.ok { background: #e6f6ea; border: 1px solid #9ad2a8; }
 .banner.info { background: #e8f1fb; border: 1px solid #9dc0e8; }
 .banner.warn { background: #fdf3e0; border: 1px solid #e8c98a; }
+.banner-actions { margin-left: 0.5rem; font-size: 0.9rem; }
+.form-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
+.form-actions .btn { padding: 0.5rem 0.9rem; }

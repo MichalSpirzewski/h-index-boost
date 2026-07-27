@@ -1,19 +1,72 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Add a paper</h1>
+{% if error %}<div class="banner warn">{{ error }}</div>{% endif %}
 <p>Provide any combination of PDF, link, or DOI.</p>
 <form action="/api/ingest" method="post" enctype="multipart/form-data">
-  <label>PDF file <input type="file" name="file" accept="application/pdf"></label>
+  <label>PDF file</label>
+  <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drag and drop a PDF, or click to browse">
+    <input type="file" name="file" id="file-input" accept="application/pdf" hidden>
+    <p class="dz-prompt">📄 Drag &amp; drop a PDF here, or <span class="dz-browse">click to browse</span></p>
+    <p class="dz-file" id="dz-file" hidden></p>
+  </div>
   <label>URL or DOI link <input type="text" name="url" placeholder="https://doi.org/10.1038/..."></label>
   <label>Raw DOI <input type="text" name="doi" placeholder="10.1038/nphys1170"></label>
   <label>Title (only needed if no DOI) <input type="text" name="title"></label>
   <label>Your name <input type="text" name="added_by" id="added_by"></label>
-  <button type="submit">Add to library</button>
+  <p class="form-actions">
+    <button type="submit">Add to library</button>
+    <a class="btn" href="/">Return to library</a>
+  </p>
 </form>
 <script>
   /* remember "your name" locally; sent as added_by */
   const field = document.getElementById("added_by");
   field.value = localStorage.getItem("refbase_added_by") || "";
   field.form.addEventListener("submit", () => localStorage.setItem("refbase_added_by", field.value));
+
+  /* drag-and-drop PDF picker: feeds the hidden file input so the form submits as usual */
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("file-input");
+  const fileLabel = document.getElementById("dz-file");
+
+  function showFile(file) {
+    if (file) {
+      fileLabel.textContent = "Selected: " + file.name;
+      fileLabel.hidden = false;
+      dropzone.classList.add("has-file");
+    } else {
+      fileLabel.hidden = true;
+      dropzone.classList.remove("has-file");
+    }
+  }
+
+  function acceptFiles(files) {
+    const file = files && files[0];
+    if (!file) return;
+    if (file.type && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      fileLabel.textContent = "That doesn't look like a PDF — ignored.";
+      fileLabel.hidden = false;
+      return;
+    }
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;   // populate the real input for form submission
+    showFile(file);
+  }
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener("change", () => showFile(fileInput.files[0]));
+
+  ["dragenter", "dragover"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add("dragover"); })
+  );
+  ["dragleave", "dragend", "drop"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove("dragover"); })
+  );
+  dropzone.addEventListener("drop", (e) => acceptFiles(e.dataTransfer.files));
 </script>
 {% endblock %}

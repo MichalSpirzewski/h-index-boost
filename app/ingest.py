@@ -479,13 +479,27 @@ def canonical_author(session: Session, author: Author) -> Author:
     return author
 
 
+# Hard-coded author aliases: variant spellings that must collapse to one canonical
+# name (case-insensitive key -> canonical display name). Applied before matching so
+# every ingest of a variant groups under the same author record.
+_NAME_ALIASES = {
+    "mateusz marek nowak": "Mateusz Nowak",
+}
+
+
+def _apply_name_alias(full_name: str) -> str:
+    return _NAME_ALIASES.get(full_name.strip().casefold(), full_name)
+
+
 def _get_or_create_author(session: Session, full_name: str, orcid: str | None) -> Author:
     """Group an incoming author with an existing one when possible (v1, no fuzzy).
 
-    Match order: ORCID, then exact normalized name (regardless of the existing
-    row's ORCID). Any match resolves to its canonical author so contributions
-    accrue to a single base record; a missing ORCID on the canonical is filled in.
+    Match order: hard-coded name alias, then ORCID, then exact normalized name
+    (regardless of the existing row's ORCID). Any match resolves to its canonical
+    author so contributions accrue to a single base record; a missing ORCID on the
+    canonical is filled in.
     """
+    full_name = _apply_name_alias(full_name)
     if orcid:
         author = session.scalar(select(Author).where(Author.orcid == orcid))
         if author:
@@ -537,9 +551,14 @@ def merge_authors(session: Session, source: Author, target: Author) -> int:
         target_article_ids.add(article_id)
         moved += 1
 
-    # Preserve an ORCID that would otherwise be lost (UNIQUE: clear it off source first).
+    # Preserve an ORCID that would otherwise be lost. orcid is UNIQUE, so the source
+    # must be cleared and flushed *before* the value is assigned to the target,
+    # otherwise both rows momentarily hold it and the flush hits the constraint.
     if target.orcid is None and source.orcid:
-        target.orcid, source.orcid = source.orcid, None
+        orcid = source.orcid
+        source.orcid = None
+        session.flush()
+        target.orcid = orcid
 
     source.merged_into_id = target.id
     session.flush()

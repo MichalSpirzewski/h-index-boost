@@ -44,8 +44,10 @@
     <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
     <div class="chips">
       {% for topic, count in topic_stats %}
-      <a class="chip chip-link{% if active_topic and active_topic.id == topic.id %} chip-active{% endif %}"
-         href="/?topic={{ topic.id }}" title="{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+      {%- set is_active = active_topic and active_topic.id == topic.id -%}
+      <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
+         href="{% if is_active %}/{% else %}/?topic={{ topic.id }}{% endif %}"
+         title="{% if is_active %}Clear filter{% else %}{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
       {% endfor %}
     </div>
   </details>
@@ -85,7 +87,7 @@
       <td>
         {%- set authors = article.authors -%}
         {%- for author in authors[:3] -%}
-          <a href="/authors/{{ author.id }}">{{ author.full_name }}</a>{% if not loop.last %}, {% endif %}
+          <a href="/authors/{{ author.id }}" title="{{ author.full_name }}">{{ author.full_name | short_name }}</a>{% if not loop.last %}, {% endif %}
         {%- endfor -%}
         {%- if authors | length > 3 %} et al.{% endif -%}
       </td>

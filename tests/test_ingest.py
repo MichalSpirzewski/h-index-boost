@@ -31,6 +31,21 @@ def test_ingest_doi_runs_full_pipeline(client) -> None:
     assert [t.name for t in article.topics] == ["Physics and Astronomy"]
 
 
+def test_hardcoded_name_alias_groups_nowak(client) -> None:
+    """'Mateusz Marek Nowak' and 'Mateusz Nowak' must resolve to one canonical author."""
+    from app import db, ingest
+
+    with db.SessionLocal() as session:
+        a = ingest._get_or_create_author(
+            session, "Mateusz Marek Nowak", "0000-0002-8949-2720"
+        )
+        b = ingest._get_or_create_author(session, "Mateusz Nowak", None)
+        session.commit()
+        assert a.id == b.id
+        assert a.full_name == "Mateusz Nowak"  # collapsed to the canonical name
+        assert a.orcid == "0000-0002-8949-2720"  # ORCID preserved from the variant
+
+
 def test_ingest_duplicate_doi_is_soft(client) -> None:
     first = client.post("/api/ingest", data={"doi": "10.1038/nphys1170"}).json()
     second = client.post("/api/ingest", data={"doi": "doi:10.1038/NPHYS1170"})

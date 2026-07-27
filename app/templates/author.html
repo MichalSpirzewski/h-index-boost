@@ -4,7 +4,7 @@
   {%- set active = (sort == key) -%}
   {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
   <th class="sortable{% if active %} active{% endif %}">
-    <a href="/authors/{{ author.id }}?sort={{ key }}&order={{ next_order }}">
+    <a href="/authors/{{ author.id }}?sort={{ key }}&order={{ next_order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
       {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
     </a>
   </th>
@@ -42,7 +42,12 @@
 </section>
 {% endif %}
 
+{% if active_topic %}
+<h2>Publications tagged “{{ active_topic.name }}” ({{ articles | length }})</h2>
+<p class="sort"><a href="/authors/{{ author.id }}">← All publications</a> · click a column header to sort.</p>
+{% else %}
 <h2>Publications ({{ articles | length }})</h2>
+{% endif %}
 {% if articles %}
 <table class="wide-table">
   <thead><tr>{{ sort_th("title", "Title") }}{{ sort_th("year", "Year") }}{{ sort_th("journal", "Journal") }}</tr></thead>
@@ -72,10 +77,14 @@
 </ul>
 {% endif %}
 
-{% if topics %}
-<h2>Topics</h2>
+{% if topic_stats %}
+<h2>Topics <span class="count-badge">{{ topic_stats | length }}</span></h2>
 <div class="chips">
-  {% for topic in topics %}<span class="chip">{{ topic.name }}</span>{% endfor %}
+  {% for topic, count in topic_stats %}
+  {%- set is_active = active_topic and active_topic.id == topic.id -%}
+  <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
+     href="{% if is_active %}/authors/{{ author.id }}{% else %}/authors/{{ author.id }}?topic={{ topic.id }}{% endif %}"
+     title="{% if is_active %}Clear filter{% else %}{{ count }} of this author’s papers tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>{% endfor %}
 </div>
 {% endif %}
 {% endblock %}

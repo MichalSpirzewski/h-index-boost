@@ -28,9 +28,10 @@ def test_dashboard_lists_first_three_authors_with_et_al(
     # The article-table row is below the all-authors panel; scope the truncation
     # check to that row (the panel deliberately lists every unique author).
     table = page.split("</section>", 1)[-1]
-    assert '<a href="/authors/1">Alex Adams</a>, ' in table
-    assert '<a href="/authors/2">Alex Baker</a>, ' in table
-    assert '<a href="/authors/3">Alex Clark</a> et al.' in table
+    # The Authors column shows the shortened "A. Adams" form (full name in title=).
+    assert '<a href="/authors/1" title="Alex Adams">A. Adams</a>, ' in table
+    assert '<a href="/authors/2" title="Alex Baker">A. Baker</a>, ' in table
+    assert '<a href="/authors/3" title="Alex Clark">A. Clark</a> et al.' in table
     assert "Davis" not in table  # only the first three show in the article row
 
 
@@ -108,6 +109,41 @@ def test_author_page_lists_only_that_authors_articles(
     # co-author from the shared paper should be linked, unrelated author should not appear
     assert '<a href="/authors/2">Alex Solo</a>' in page
     assert "Alex Other" not in page
+
+
+def test_author_page_filters_publications_by_topic(client, monkeypatch, crossref_message) -> None:
+    import copy
+
+    from sqlalchemy import select
+
+    from app import db, ingest
+    from app.models import Author, Topic
+
+    def _ingest(doi, title, subjects):
+        message = copy.deepcopy(crossref_message)
+        message["DOI"] = doi
+        message["title"] = [title]
+        message["subject"] = subjects
+        message["author"] = [{"given": "Ada", "family": "Kowalska", "sequence": "first"}]
+        monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi: message)
+        client.post("/api/ingest", data={"doi": doi})
+
+    _ingest("10.8888/a", "Reactor Study", ["Reactors"])
+    _ingest("10.8888/b", "Physics Study", ["Physics"])
+
+    with db.SessionLocal() as session:
+        author_id = session.scalar(select(Author.id).where(Author.full_name == "Ada Kowalska"))
+        reactors_id = session.scalar(select(Topic.id).where(Topic.name == "Reactors"))
+
+    # Unfiltered: both papers shown; the filter stays on the author page (not the dashboard).
+    full = client.get(f"/authors/{author_id}").text
+    assert "Reactor Study" in full and "Physics Study" in full
+    assert f'href="/authors/{author_id}?topic={reactors_id}"' in full
+
+    filtered = client.get(f"/authors/{author_id}?topic={reactors_id}").text
+    assert "Publications tagged" in filtered
+    assert "Reactor Study" in filtered
+    assert "Physics Study" not in filtered  # filtered out, in-place
 
 
 def test_author_page_404_for_unknown_author(client) -> None:

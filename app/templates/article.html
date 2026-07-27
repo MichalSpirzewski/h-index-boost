@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-{% if added %}<div class="banner ok">Added to the library.</div>{% endif %}
+{% if added %}
+<div class="banner ok">
+  Added to the library.
+  <span class="banner-actions"><a href="/">Return to library</a> · <a href="/upload">Add another paper</a></span>
+</div>
+{% endif %}
 {% if existing %}
 <div class="banner info">
   This paper is already in the library.
