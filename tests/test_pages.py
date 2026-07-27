@@ -53,6 +53,43 @@ def test_dashboard_sort_by_author(client, monkeypatch, crossref_message) -> None
     )
 
 
+def test_dashboard_filters_by_topic(client, monkeypatch, crossref_message) -> None:
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import ArticleTopic, Topic
+
+    # Two papers tagged "Reactors", one tagged "Physics".
+    def _ingest_with_subjects(doi, title, subjects):
+        import copy
+
+        from app import ingest
+
+        message = copy.deepcopy(crossref_message)
+        message["DOI"] = doi
+        message["title"] = [title]
+        message["subject"] = subjects
+        monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi: message)
+        client.post("/api/ingest", data={"doi": doi})
+
+    _ingest_with_subjects("10.7777/a", "Reactor Paper A", ["Reactors"])
+    _ingest_with_subjects("10.7777/b", "Reactor Paper B", ["Reactors"])
+    _ingest_with_subjects("10.7777/c", "Physics Paper C", ["Physics"])
+
+    with db.SessionLocal() as session:
+        reactors_id = session.scalar(select(Topic.id).where(Topic.name == "Reactors"))
+        # sanity: 2 articles carry it
+        tagged = session.scalars(
+            select(ArticleTopic.article_id).where(ArticleTopic.topic_id == reactors_id)
+        ).all()
+        assert len(tagged) == 2
+
+    page = client.get(f"/?topic={reactors_id}").text
+    assert "Papers tagged" in page
+    assert "Reactor Paper A" in page and "Reactor Paper B" in page
+    assert "Physics Paper C" not in page  # filtered out
+
+
 def test_author_page_lists_only_that_authors_articles(
     client, monkeypatch, crossref_message
 ) -> None:

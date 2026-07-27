@@ -5,7 +5,7 @@
   {%- set active = (sort == key) -%}
   {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
   <th class="sortable{% if active %} active{% endif %}">
-    <a href="/?sort={{ key }}&order={{ next_order }}">
+    <a href="/?sort={{ key }}&order={{ next_order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
       {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
     </a>
   </th>
@@ -38,8 +38,26 @@
   </details>
 </section>
 {% endif %}
+{% if topic_stats %}
+<section class="authors-panel topics-panel">
+  <details open>
+    <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
+    <div class="chips">
+      {% for topic, count in topic_stats %}
+      <a class="chip chip-link{% if active_topic and active_topic.id == topic.id %} chip-active{% endif %}"
+         href="/?topic={{ topic.id }}" title="{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+      {% endfor %}
+    </div>
+  </details>
+</section>
+{% endif %}
+{% if active_topic %}
+<h1>Papers tagged “{{ active_topic.name }}” <span class="count-badge">{{ articles | length }}</span></h1>
+<p class="sort"><a href="/">← All papers</a> · click a column header to sort.</p>
+{% else %}
 <h1>{% if sort == "recent" %}Recent additions{% else %}All articles{% endif %}</h1>
 <p class="sort">Click a column header to sort.{% if sort != "recent" %} <a href="/">Reset to date added</a>.{% endif %}</p>
+{% endif %}
 {% if articles %}
 <table class="wide-table">
   <thead>

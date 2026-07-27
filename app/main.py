@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app import bibtex, contacts, db, ingest
-from app.models import Article, ArticleAuthor, Author
+from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
 
 app = FastAPI(title="RefBase")
 
@@ -233,6 +233,7 @@ def index(
     session: Session = Depends(db.get_db),
     sort: str = "recent",
     order: str = "",
+    topic: int | None = None,
 ):
     if sort not in _SORT_KEYS:
         sort = "recent"
@@ -240,6 +241,8 @@ def index(
     if order not in ("asc", "desc"):
         order = "desc" if sort in ("recent", "year") else "asc"
     descending = order == "desc"
+
+    active_topic = session.get(Topic, topic) if topic is not None else None
 
     query = (
         select(Article)
@@ -249,9 +252,14 @@ def index(
             selectinload(Article.topics),
         )
     )
+    if active_topic is not None:  # filter to papers carrying this keyword/topic
+        query = query.join(ArticleTopic, ArticleTopic.article_id == Article.id).where(
+            ArticleTopic.topic_id == active_topic.id
+        )
     column = _SORT_COLUMNS.get(sort, Article.created_at)
     query = query.order_by(column.desc() if descending else column.asc())
-    articles = list(session.scalars(query.limit(20)))
+    # Show the whole tagged set when filtering; otherwise the recent-additions window.
+    articles = list(session.scalars(query if active_topic is not None else query.limit(20)))
 
     if sort == "author":
         def first_author_surname(article: Article) -> tuple[int, str]:
@@ -285,6 +293,17 @@ def index(
     ncnr_authors = [pair for pair in author_stats if pair[0].id in ncnr_ids]
     other_authors = [pair for pair in author_stats if pair[0].id not in ncnr_ids]
 
+    # Keywords/topics across the library + how many articles carry each.
+    topic_count = func.count(ArticleTopic.article_id)
+    topic_stats = session.execute(
+        select(Topic, topic_count)
+        .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
+        .join(Article, Article.id == ArticleTopic.article_id)
+        .where(Article.hidden.is_(False))
+        .group_by(Topic.id)
+        .order_by(topic_count.desc(), Topic.name)
+    ).all()
+
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -296,6 +315,8 @@ def index(
             "ncnr_authors": ncnr_authors,
             "other_authors": other_authors,
             "ncnr_label": _NCNR_LABEL,
+            "topic_stats": topic_stats,
+            "active_topic": active_topic,
         },
     )
 

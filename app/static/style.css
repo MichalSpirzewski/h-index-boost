@@ -63,6 +63,12 @@ button { padding: 0.5rem 1rem; }
   letter-spacing: 0.02em;
 }
 .author-groups > .author-group-title:first-child { margin-top: 0; }
+.topics-panel .chips { margin-top: 0.75rem; }
+.chip-count { color: #1a4d8f; font-weight: 600; margin-left: 0.15rem; }
+.chip-link { text-decoration: none; color: #445; cursor: pointer; }
+.chip-link:hover { background: #dfe7f1; }
+.chip-active { background: #1a4d8f; color: #fff; }
+.chip-active .chip-count { color: #cfe0f5; }
 .authors-panel .count-badge {
   display: inline-block;
   background: #1a4d8f;
