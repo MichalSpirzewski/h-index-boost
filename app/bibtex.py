@@ -119,3 +119,9 @@ def export_bibtex(articles: list[Article]) -> str:
 
 def article_bibtex(article: Article) -> str:
     return export_bibtex([article])
+
+
+def pdf_filename(article: Article) -> str:
+    """Human-readable download filename, e.g. smith2020quantum.pdf."""
+    base_key, _, _ = _prepare(article)
+    return f"{base_key}.pdf"

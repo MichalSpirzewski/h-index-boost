@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ author.full_name }}</h1>
+{% if author.orcid %}<p><a href="https://orcid.org/{{ author.orcid }}">{{ author.orcid }}</a></p>{% endif %}
+
+<h2>Publications ({{ articles | length }})</h2>
+{% if articles %}
+<table>
+  <thead><tr><th>Title</th><th>Year</th><th>Journal</th></tr></thead>
+  <tbody>
+    {% for article in articles %}
+    <tr>
+      <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td>{{ article.year or "" }}</td>
+      <td>{{ article.journal or "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No articles found for this author.</p>
+{% endif %}
+
+{% if co_authors %}
+<h2>Co-authors</h2>
+<p>
+  {% for co in co_authors %}<a href="/authors/{{ co.id }}">{{ co.full_name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+</p>
+{% endif %}
+
+{% if topics %}
+<h2>Topics</h2>
+<div class="chips">
+  {% for topic in topics %}<span class="chip">{{ topic.name }}</span>{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

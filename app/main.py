@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app import bibtex, db, ingest
-from app.models import Article, ArticleAuthor
+from app.models import Article, ArticleAuthor, Author
 
 app = FastAPI(title="RefBase")
 
@@ -237,6 +237,43 @@ def search_page(request: Request, session: Session = Depends(db.get_db), q: str 
     )
 
 
+@app.get("/authors/{author_id}")
+def author_detail(request: Request, author_id: int, session: Session = Depends(db.get_db)):
+    author = session.get(Author, author_id)
+    if author is None:
+        raise HTTPException(status_code=404, detail="Author not found")
+    articles = list(
+        session.scalars(
+            select(Article)
+            .join(ArticleAuthor, ArticleAuthor.article_id == Article.id)
+            .where(ArticleAuthor.author_id == author_id, Article.hidden.is_(False))
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+                selectinload(Article.topics),
+            )
+            .order_by(Article.created_at.desc())
+        )
+    )
+    co_authors = {}
+    topics = {}
+    for article in articles:
+        for co_author in article.authors:
+            if co_author.id != author_id:
+                co_authors[co_author.id] = co_author
+        for topic in article.topics:
+            topics[topic.id] = topic
+    return templates.TemplateResponse(
+        request,
+        "author.html",
+        {
+            "author": author,
+            "articles": articles,
+            "co_authors": sorted(co_authors.values(), key=lambda a: a.full_name),
+            "topics": sorted(topics.values(), key=lambda t: t.name),
+        },
+    )
+
+
 @app.get("/articles/{article_id}")
 def article_detail(
     request: Request,
@@ -285,8 +322,13 @@ def article_bibtex(article_id: int, session: Session = Depends(db.get_db)):
 
 
 @app.get("/articles/{article_id}/pdf")
-def article_pdf(article_id: int, session: Session = Depends(db.get_db)):
+def article_pdf(article_id: int, session: Session = Depends(db.get_db), download: int = 0):
     article = session.get(Article, article_id)
     if article is None or not article.pdf_path:
         raise HTTPException(status_code=404, detail="No PDF for this article")
-    return FileResponse(article.pdf_path, media_type="application/pdf")
+    return FileResponse(
+        article.pdf_path,
+        media_type="application/pdf",
+        filename=bibtex.pdf_filename(article),
+        content_disposition_type="attachment" if download else "inline",
+    )

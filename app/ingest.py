@@ -106,6 +106,47 @@ def extract_pdf_text(pdf_bytes: bytes) -> str | None:
     return full_text[:_MAX_PDF_TEXT] or None
 
 
+# --------------------------------------------------------------------------- abstract fallback
+
+# Crossref only carries an `abstract` field when the publisher submits one — MDPI
+# journals (e.g. Energies) do, but Elsevier/Springer/etc. usually don't. When
+# that's missing, grep it straight out of the PDF: find the "Abstract" heading
+# (allowing letter-spaced headings like "A B S T R A C T", common in two-column
+# templates) and capture until the next section heading.
+_ABSTRACT_RE = re.compile(
+    r"a\s*b\s*s\s*t\s*r\s*a\s*c\s*t\s*[:.\-—–]?\s*\n?"
+    r"(.+?)"
+    r"(?=\n\s*(?:key\s*words?|highlights?|(?:\d+\.?\s*)?introduction\b"
+    r"|©|http\S|article\s+info|received\b|1\.\s)|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_MIN_ABSTRACT_LEN = 40
+_MAX_ABSTRACT_LEN = 3000
+
+
+def _clean_abstract(raw: str) -> str:
+    text = re.sub(r"\s*\n\s*", " ", raw).strip()
+    text = re.sub(r"\s{2,}", " ", text)
+    return text[:_MAX_ABSTRACT_LEN].strip()
+
+
+def extract_abstract_from_pdf(pdf_bytes: bytes) -> str | None:
+    """Best-effort abstract from a heading-delimited block on the first pages."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return None
+    with doc:
+        for page in doc.pages(0, min(3, doc.page_count)):
+            match = _ABSTRACT_RE.search(page.get_text())
+            if not match:
+                continue
+            candidate = _clean_abstract(match.group(1))
+            if len(candidate) >= _MIN_ABSTRACT_LEN:
+                return candidate
+    return None
+
+
 # --------------------------------------------------------------------------- keywords
 
 _KEYWORD_LINE_RE = re.compile(
@@ -325,10 +366,20 @@ def add_pdf_keywords(session: Session, article: Article, pdf_bytes: bytes) -> li
     return keywords
 
 
+def _backfill_abstract(article: Article, pdf_bytes: bytes) -> None:
+    """Fill a missing abstract from the PDF; never override a real one from Crossref/S2."""
+    if article.abstract:
+        return
+    abstract = extract_abstract_from_pdf(pdf_bytes)
+    if abstract:
+        article.abstract = abstract
+
+
 def attach_pdf(session: Session, article: Article, pdf_bytes: bytes) -> None:
     """Store a PDF for an article: file on disk, full text for search, keywords as topics."""
     article.pdf_path = save_pdf(pdf_bytes, article.doi)
     article.pdf_text = extract_pdf_text(pdf_bytes)
+    _backfill_abstract(article, pdf_bytes)
     session.commit()
     add_pdf_keywords(session, article, pdf_bytes)
 
@@ -342,6 +393,7 @@ def rescan_article_pdf(session: Session, article: Article) -> list[str]:
     except OSError:
         return []
     article.pdf_text = extract_pdf_text(pdf_bytes)
+    _backfill_abstract(article, pdf_bytes)
     session.commit()
     return add_pdf_keywords(session, article, pdf_bytes)
 

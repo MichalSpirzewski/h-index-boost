@@ -45,7 +45,7 @@
 {% endif %}
 
 <p>
-  {% for author in article.authors %}{{ author.full_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+  {% for author in article.authors %}<a href="/authors/{{ author.id }}">{{ author.full_name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
 </p>
 <dl>
   {% if article.journal %}<dt>Journal</dt><dd>{{ article.journal }}{% if article.year %} ({{ article.year }}){% endif %}</dd>{% endif %}
@@ -54,10 +54,53 @@
   {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
 </dl>
 {% if article.abstract %}<h2>Abstract</h2><p>{{ article.abstract }}</p>{% endif %}
-<p>
-  {% if article.pdf_path %}<a href="/articles/{{ article.id }}/pdf">Download PDF</a> · {% endif %}
-  <a href="/articles/{{ article.id }}/bibtex">Download BibTeX</a>
+<p class="row-actions">
+  {% if article.pdf_path %}
+  <a class="btn" href="/articles/{{ article.id }}/pdf" target="_blank" rel="noopener">Show PDF</a>
+  <a class="btn" href="/articles/{{ article.id }}/pdf?download=1">Download PDF</a>
+  {% endif %}
+  <button type="button" class="btn" id="copy-bibtex">Copy BibTeX</button>
+  <a class="btn" href="/articles/{{ article.id }}/bibtex">Download BibTeX</a>
 </p>
+<script>
+  (function () {
+    var btn = document.getElementById("copy-bibtex");
+    if (!btn) return;
+    var defaultLabel = btn.textContent;
+
+    function flash(label) {
+      btn.textContent = label;
+      setTimeout(function () { btn.textContent = defaultLabel; }, 1500);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try {
+        document.execCommand("copy");
+        return Promise.resolve();
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+
+    btn.addEventListener("click", function () {
+      fetch("/articles/{{ article.id }}/bibtex")
+        .then(function (r) { return r.text(); })
+        .then(copyText)
+        .then(function () { flash("Copied!"); })
+        .catch(function () { flash("Copy failed"); });
+    });
+  })();
+</script>
 {% if article.pdf_path %}
 <form action="/articles/{{ article.id }}/rescan" method="post">
   <button type="submit">Rescan PDF for keywords</button>
