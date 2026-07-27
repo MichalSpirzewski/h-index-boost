@@ -1,12 +1,51 @@
 {% extends "base.html" %}
+{#- Sortable publications header: click to sort ascending, click the active one to flip. -#}
+{% macro sort_th(key, label) %}
+  {%- set active = (sort == key) -%}
+  {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
+  <th class="sortable{% if active %} active{% endif %}">
+    <a href="/authors/{{ author.id }}?sort={{ key }}&order={{ next_order }}">
+      {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
+    </a>
+  </th>
+{% endmacro %}
 {% block content %}
 <h1>{{ author.full_name }}</h1>
 {% if author.orcid %}<p><a href="https://orcid.org/{{ author.orcid }}">{{ author.orcid }}</a></p>{% endif %}
+{% if affiliations %}
+<ul class="affiliations">
+  {% for aff in affiliations %}<li>{{ aff }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+{% if is_ncbj %}
+{% set has_contact = contact.email or contact.phone or contact.meeting_link %}
+<section class="contact-card">
+  <h2>NCBJ contact</h2>
+  {% if contact_saved %}<p class="saved-note">✓ Contact saved.</p>{% endif %}
+  {% if has_contact %}
+  <ul class="contact-details">
+    {% if contact.email %}<li>✉ <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></li>{% endif %}
+    {% if contact.phone %}<li>☎ <a href="tel:{{ contact.phone }}">{{ contact.phone }}</a></li>{% endif %}
+    {% if contact.meeting_link %}<li>🎥 <a href="{{ contact.meeting_link }}" target="_blank" rel="noopener">Join meeting</a></li>{% endif %}
+  </ul>
+  {% endif %}
+  <details class="contact-editor"{% if not has_contact %} open{% endif %}>
+    <summary>{{ "Edit contact details" if has_contact else "Add contact details" }}</summary>
+    <form method="post" action="/authors/{{ author.id }}/contact" class="contact-form">
+      <label>Email <input type="email" name="email" value="{{ contact.email or '' }}" placeholder="name@ncbj.gov.pl"></label>
+      <label>Phone <input type="text" name="phone" value="{{ contact.phone or '' }}" placeholder="+48 …"></label>
+      <label>Meeting link <input type="url" name="meeting_link" value="{{ contact.meeting_link or '' }}" placeholder="https://…"></label>
+      <button type="submit">Save contact</button>
+    </form>
+  </details>
+</section>
+{% endif %}
 
 <h2>Publications ({{ articles | length }})</h2>
 {% if articles %}
 <table>
-  <thead><tr><th>Title</th><th>Year</th><th>Journal</th></tr></thead>
+  <thead><tr>{{ sort_th("title", "Title") }}{{ sort_th("year", "Year") }}{{ sort_th("journal", "Journal") }}</tr></thead>
   <tbody>
     {% for article in articles %}
     <tr>
@@ -21,11 +60,16 @@
 <p>No articles found for this author.</p>
 {% endif %}
 
-{% if co_authors %}
-<h2>Co-authors</h2>
-<p>
-  {% for co in co_authors %}<a href="/authors/{{ co.id }}">{{ co.full_name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
-</p>
+{% if co_author_stats %}
+<h2>Co-authors <span class="count-badge">{{ co_author_stats | length }}</span></h2>
+<ul class="author-list">
+  {% for co, joint in co_author_stats %}
+  <li>
+    <a href="/authors/{{ co.id }}">{{ co.full_name }}</a>
+    <span class="pub-count" title="{{ joint }} joint publication{{ '' if joint == 1 else 's' }} with {{ author.full_name }}">{{ joint }}</span>
+  </li>
+  {% endfor %}
+</ul>
 {% endif %}
 
 {% if topics %}

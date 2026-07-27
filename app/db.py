@@ -69,6 +69,14 @@ def init_db() -> None:
         if article_cols and "pdf_text" not in article_cols:
             conn.execute(text("ALTER TABLE articles ADD COLUMN pdf_text TEXT"))
 
+        author_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(authors)"))]
+        if author_cols and "merged_into_id" not in author_cols:
+            conn.execute(text("ALTER TABLE authors ADD COLUMN merged_into_id INTEGER"))
+
+        aa_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(article_authors)"))]
+        if aa_cols and "affiliation" not in aa_cols:
+            conn.execute(text("ALTER TABLE article_authors ADD COLUMN affiliation TEXT"))
+
         fts_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(articles_fts)"))]
         rebuild = bool(fts_cols) and set(fts_cols) != set(_FTS_COLUMNS)
         if rebuild:

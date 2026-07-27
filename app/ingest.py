@@ -8,7 +8,9 @@ import html
 import json
 import os
 import re
+import unicodedata
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +20,7 @@ from rapidfuzz import fuzz
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import db
+from app import contacts, db
 from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
 
 CROSSREF_MAILTO = os.environ.get("CROSSREF_MAILTO", "guhard@gmail.com")
@@ -192,6 +194,196 @@ def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
     return []
 
 
+# --------------------------------------------------------------------------- affiliations
+
+# Institution words that mark a line as an affiliation rather than an author list.
+# Stems (no trailing \b) so "Universi" also matches University/Universität/Università.
+_AFF_KEYWORD_RE = re.compile(
+    r"\b(Universi|Univerz|Institut|Instytut|Centre|Center|Centrum|Department"
+    r"|Laborator|Faculty|Fakult|School|College|Academ|Politech|Politecnico"
+    r"|Ministr|Hospital|Wydział|Division|GmbH|Research)",
+    re.IGNORECASE,
+)
+# An affiliation line prefixed by a superscript marker, e.g. "a National Centre…"
+# or "1. Warsaw University…". Group 1 = marker, group 2 = affiliation text.
+_MARKED_AFF_RE = re.compile(r"^\s*([a-z]|\d{1,2})[\s.,)]+(.+)$", re.IGNORECASE)
+# Where the author/affiliation block ends (section headings, copyright, DOI line).
+_AFF_BOUNDARY_RE = re.compile(
+    r"^(a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|a\s*r\s*t\s*i\s*c\s*l\s*e|keywords?|highlights?"
+    r"|©|https?:|\d+\.\s|introduction)\b",
+    re.IGNORECASE,
+)
+_MIN_AFF_LEN = 15
+_MAX_AFF_LEN = 250
+
+
+def _clean_affiliation(raw: str) -> str:
+    text = re.sub(r"\s{2,}", " ", raw.strip()).strip(" ,;")
+    return text[:_MAX_AFF_LEN].strip()
+
+
+def _author_markers(region: str, full_name: str) -> list[str]:
+    """Superscript markers (a, b, 1, 2…) trailing an author's name in the header block."""
+    family = full_name.split()[-1] if full_name.split() else ""
+    if not family:
+        return []
+    idx = region.find(family)
+    if idx == -1:
+        return []
+    tail = region[idx + len(family):][:20]
+    # Markers are lowercase letters/digits; author names are capitalized, so a
+    # case-sensitive match stops the run before it bleeds into the next name.
+    match = re.match(r"[\s*∗†,]*([a-z0-9](?:\s*,\s*[a-z0-9])*)", tail)
+    if not match:
+        return []
+    return [m.strip().lower() for m in match.group(1).split(",") if m.strip()]
+
+
+def extract_author_affiliations(
+    pdf_bytes: bytes, author_names: list[str]
+) -> list[str | None]:
+    """Best-effort affiliation per author (aligned to `author_names` order).
+
+    Reads the header block on page 1: collects affiliation lines (mapping any
+    superscript markers), then either assigns the single affiliation to everyone,
+    maps markers to authors, or — when it can't tell — shares all affiliations.
+    Returns None for an author whose affiliation couldn't be resolved.
+    """
+    empty: list[str | None] = [None] * len(author_names)
+    if not author_names:
+        return empty
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            if doc.page_count == 0:
+                return empty
+            lines = doc[0].get_text().splitlines()
+    except Exception:
+        return empty
+
+    marker_map: dict[str, str] = {}
+    ordered_affs: list[str] = []
+    first_aff_line = len(lines)
+    in_aff_block = False  # once True, marker lines are affiliations regardless of language
+    for i, line in enumerate(lines[:40]):
+        s = line.strip()
+        if not s:
+            continue
+        if ordered_affs and _AFF_BOUNDARY_RE.match(s):
+            break
+        marked = _MARKED_AFF_RE.match(s)
+        # A marker-prefixed line is an affiliation if it looks like one (keyword) OR
+        # we're already inside the block — a continuation like a Czech "b Fakulta …"
+        # or "c Centrum výzkumu …" that carries no English institution keyword.
+        if marked and (_AFF_KEYWORD_RE.search(marked.group(2)) or in_aff_block):
+            aff = _clean_affiliation(marked.group(2))
+            if len(aff) >= _MIN_AFF_LEN:
+                marker_map[marked.group(1).lower()] = aff
+                ordered_affs.append(aff)
+                first_aff_line = min(first_aff_line, i)
+                in_aff_block = True
+        elif (
+            _AFF_KEYWORD_RE.search(s)
+            and len(s) >= _MIN_AFF_LEN
+            and not s.lower().startswith("contents")
+        ):
+            ordered_affs.append(_clean_affiliation(s))
+            first_aff_line = min(first_aff_line, i)
+            in_aff_block = True
+
+    if not ordered_affs:
+        return empty
+    distinct = list(dict.fromkeys(ordered_affs))
+
+    # One affiliation on the paper → it's everyone's.
+    if len(distinct) == 1:
+        return [distinct[0]] * len(author_names)
+
+    # Multiple affiliations with markers → map each author via their markers.
+    if marker_map:
+        region = " ".join(line.strip() for line in lines[:first_aff_line])
+        resolved: list[str | None] = []
+        for name in author_names:
+            affs = [marker_map[m] for m in _author_markers(region, name) if m in marker_map]
+            resolved.append("; ".join(dict.fromkeys(affs)) or None)
+        if any(resolved):
+            return resolved
+
+    # Multiple affiliations, can't map cleanly → share them all (best effort).
+    return ["; ".join(distinct)] * len(author_names)
+
+
+# --------------------------------------------------------------------------- emails
+
+NCBJ_EMAIL_DOMAIN = "@ncbj.gov.pl"
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+# Latin letters that carry no NFKD decomposition, so diacritic-stripping misses them.
+_TRANSLIT = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ħ": "h", "ß": "ss"})
+
+
+def _ascii_fold(text: str) -> str:
+    """Lowercase and strip diacritics so 'Sierchuła' matches 'sierchula'."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return stripped.lower().translate(_TRANSLIT)
+
+
+def extract_ncbj_emails(pdf_bytes: bytes) -> list[str]:
+    """Unique @ncbj.gov.pl e-mails from the first two pages, in order of appearance."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            text = "\n".join(doc[i].get_text() for i in range(min(2, doc.page_count)))
+    except Exception:
+        return []
+    seen: dict[str, None] = {}
+    for match in _EMAIL_RE.findall(text):
+        email = match.lower()
+        if email.endswith(NCBJ_EMAIL_DOMAIN):
+            seen.setdefault(email, None)
+    return list(seen)
+
+
+def correlate_emails_to_authors(
+    emails: list[str], author_names: list[str]
+) -> dict[str, str]:
+    """Match NCBJ e-mails to authors via the 'firstname.lastname' local part.
+
+    Returns {author_name: email}. Colliding surnames (e.g. two Skrzypeks) are
+    disambiguated by the given-name token; genuinely ambiguous ones are skipped.
+    """
+    by_family: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for name in author_names:
+        parts = name.split()
+        if not parts:
+            continue
+        by_family[_ascii_fold(parts[-1])].append((name, _ascii_fold(parts[0])))
+
+    result: dict[str, str] = {}
+    for email in emails:
+        tokens = [t for t in re.split(r"[._\-]+", email.split("@")[0]) if t]
+        if not tokens:
+            continue
+        candidates = by_family.get(_ascii_fold(tokens[-1]))
+        if not candidates:
+            continue
+        if len(candidates) == 1:
+            chosen = candidates[0][0]
+        else:  # same surname → disambiguate on the given-name token
+            first_tok = _ascii_fold(tokens[0])
+            chosen = next(
+                (
+                    name
+                    for name, first in candidates
+                    if first and (first.startswith(first_tok) or first_tok.startswith(first))
+                ),
+                None,
+            )
+        if chosen:
+            result.setdefault(chosen, email)
+    return result
+
+
 # --------------------------------------------------------------------------- storage
 
 def save_pdf(pdf_bytes: bytes, doi: str | None) -> str:
@@ -275,23 +467,83 @@ def _normalize_orcid(orcid: str | None) -> str | None:
     ).upper() or None
 
 
+def canonical_author(session: Session, author: Author) -> Author:
+    """Follow the `merged_into_id` chain to the base (canonical) author."""
+    seen: set[int] = set()
+    while author.merged_into_id is not None and author.id not in seen:
+        seen.add(author.id)
+        parent = session.get(Author, author.merged_into_id)
+        if parent is None:
+            break
+        author = parent
+    return author
+
+
 def _get_or_create_author(session: Session, full_name: str, orcid: str | None) -> Author:
-    """ORCID match first; otherwise exact normalized-name match. No fuzzy merging (v1)."""
+    """Group an incoming author with an existing one when possible (v1, no fuzzy).
+
+    Match order: ORCID, then exact normalized name (regardless of the existing
+    row's ORCID). Any match resolves to its canonical author so contributions
+    accrue to a single base record; a missing ORCID on the canonical is filled in.
+    """
     if orcid:
         author = session.scalar(select(Author).where(Author.orcid == orcid))
         if author:
-            return author
-    author = session.scalar(
-        select(Author).where(Author.full_name == full_name, Author.orcid.is_(None))
+            return canonical_author(session, author)
+    existing = session.scalar(
+        select(Author).where(Author.full_name == full_name).order_by(Author.id)
     )
-    if author:
-        if orcid:
+    if existing:
+        author = canonical_author(session, existing)
+        if orcid and author.orcid is None:
             author.orcid = orcid
         return author
     author = Author(full_name=full_name, orcid=orcid)
     session.add(author)
     session.flush()
     return author
+
+
+def merge_authors(session: Session, source: Author, target: Author) -> int:
+    """Fold `source` into `target`: move article links, then soft-mark source merged.
+
+    Returns the number of article links moved. Links to articles the target already
+    authors are dropped (the composite PK forbids duplicates). No rows are deleted —
+    `source` stays put with `merged_into_id` set, so the merge is auditable/reversible.
+    """
+    source = canonical_author(session, source)
+    target = canonical_author(session, target)
+    if source.id == target.id:
+        return 0
+
+    target_article_ids = {
+        aid for (aid,) in session.execute(
+            select(ArticleAuthor.article_id).where(ArticleAuthor.author_id == target.id)
+        )
+    }
+    moved = 0
+    links = session.scalars(
+        select(ArticleAuthor).where(ArticleAuthor.author_id == source.id)
+    ).all()
+    for link in links:
+        if link.article_id in target_article_ids:
+            session.delete(link)  # target already credited on this article
+            continue
+        # author_id is part of the composite PK, so re-point via delete + insert.
+        article_id, position = link.article_id, link.position
+        session.delete(link)
+        session.flush()
+        session.add(ArticleAuthor(article_id=article_id, author_id=target.id, position=position))
+        target_article_ids.add(article_id)
+        moved += 1
+
+    # Preserve an ORCID that would otherwise be lost (UNIQUE: clear it off source first).
+    if target.orcid is None and source.orcid:
+        target.orcid, source.orcid = source.orcid, None
+
+    source.merged_into_id = target.id
+    session.flush()
+    return moved
 
 
 def _get_or_create_topic(session: Session, name: str) -> Topic:
@@ -328,7 +580,17 @@ def apply_crossref(session: Session, article: Article, message: dict[str, Any]) 
         if author.id in seen_author_ids:
             continue
         seen_author_ids.add(author.id)
-        session.add(ArticleAuthor(article_id=article.id, author_id=author.id, position=position))
+        affiliation = "; ".join(
+            a["name"].strip() for a in (entry.get("affiliation") or []) if a.get("name")
+        ) or None
+        session.add(
+            ArticleAuthor(
+                article_id=article.id,
+                author_id=author.id,
+                position=position,
+                affiliation=affiliation,
+            )
+        )
         position += 1
 
     for subject in message.get("subject") or []:
@@ -366,6 +628,86 @@ def add_pdf_keywords(session: Session, article: Article, pdf_bytes: bytes) -> li
     return keywords
 
 
+def apply_pdf_affiliations(session: Session, article: Article) -> int:
+    """Fill missing per-author affiliations for an article from its stored PDF.
+
+    Never overrides an affiliation already set (e.g. from Crossref). Returns the
+    number of author links filled. Must run *after* apply_crossref (which creates
+    the author links) since PDF parsing has no authors to attach to on its own.
+    """
+    if not article.pdf_path:
+        return 0
+    links = (
+        session.scalars(
+            select(ArticleAuthor)
+            .where(ArticleAuthor.article_id == article.id)
+            .order_by(ArticleAuthor.position)
+        ).all()
+    )
+    if not links or all(link.affiliation for link in links):
+        return 0
+    try:
+        pdf_bytes = Path(article.pdf_path).read_bytes()
+    except OSError:
+        return 0
+
+    names = [session.get(Author, link.author_id).full_name for link in links]
+    affiliations = extract_author_affiliations(pdf_bytes, names)
+    filled = 0
+    for link, affiliation in zip(links, affiliations, strict=False):
+        if not link.affiliation and affiliation:
+            link.affiliation = affiliation
+            filled += 1
+    if filled:
+        session.commit()
+    return filled
+
+
+def apply_pdf_emails(session: Session, article: Article) -> int:
+    """Correlate @ncbj.gov.pl e-mails in the PDF to authors and store them as contacts.
+
+    Only fills an author's contact e-mail when it's currently empty, so a manually
+    entered address is never clobbered. Returns the number of e-mails newly stored.
+    """
+    if not article.pdf_path:
+        return 0
+    links = session.scalars(
+        select(ArticleAuthor)
+        .where(ArticleAuthor.article_id == article.id)
+        .order_by(ArticleAuthor.position)
+    ).all()
+    if not links:
+        return 0
+    try:
+        pdf_bytes = Path(article.pdf_path).read_bytes()
+    except OSError:
+        return 0
+
+    emails = extract_ncbj_emails(pdf_bytes)
+    if not emails:
+        return 0
+
+    id_by_name = {session.get(Author, link.author_id).full_name: link.author_id for link in links}
+    correlated = correlate_emails_to_authors(emails, list(id_by_name))
+    filled = 0
+    for name, email in correlated.items():
+        author_id = id_by_name[name]
+        existing = contacts.get(author_id)
+        if existing.get("email"):
+            continue  # keep whatever's already there (manual or previously derived)
+        contacts.save(
+            author_id,
+            name,
+            {
+                "email": email,
+                "phone": existing.get("phone"),
+                "meeting_link": existing.get("meeting_link"),
+            },
+        )
+        filled += 1
+    return filled
+
+
 def _backfill_abstract(article: Article, pdf_bytes: bytes) -> None:
     """Fill a missing abstract from the PDF; never override a real one from Crossref/S2."""
     if article.abstract:
@@ -395,7 +737,10 @@ def rescan_article_pdf(session: Session, article: Article) -> list[str]:
     article.pdf_text = extract_pdf_text(pdf_bytes)
     _backfill_abstract(article, pdf_bytes)
     session.commit()
-    return add_pdf_keywords(session, article, pdf_bytes)
+    keywords = add_pdf_keywords(session, article, pdf_bytes)
+    apply_pdf_affiliations(session, article)
+    apply_pdf_emails(session, article)
+    return keywords
 
 
 # --------------------------------------------------------------------------- duplicates
@@ -452,6 +797,14 @@ def process_article(article_id: int) -> None:
                     pdf_bytes = download_pdf(oa_url)
                     if pdf_bytes:
                         attach_pdf(session, article, pdf_bytes)
+        except Exception:
+            pass
+
+        # Fill any author affiliations Crossref didn't provide from the PDF header,
+        # and correlate NCBJ corresponding-author e-mails to their authors.
+        try:
+            apply_pdf_affiliations(session, article)
+            apply_pdf_emails(session, article)
         except Exception:
             pass
 

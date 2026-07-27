@@ -50,8 +50,17 @@ class Author(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     orcid: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    # Duplicate grouping: a merged author points at its canonical ("base") author.
+    # Canonical authors have NULL. Soft merge only — the row is never deleted.
+    merged_into_id: Mapped[int | None] = mapped_column(
+        ForeignKey("authors.id"), nullable=True
+    )
 
     article_links: Mapped[list[ArticleAuthor]] = relationship(back_populates="author")
+
+    @property
+    def is_merged(self) -> bool:
+        return self.merged_into_id is not None
 
 
 class Topic(Base):
@@ -71,6 +80,8 @@ class ArticleAuthor(Base):
     article_id: Mapped[int] = mapped_column(ForeignKey("articles.id"), primary_key=True)
     author_id: Mapped[int] = mapped_column(ForeignKey("authors.id"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    # This author's affiliation *on this paper* (Crossref if present, else PDF-parsed).
+    affiliation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     article: Mapped[Article] = relationship(back_populates="author_links")
     author: Mapped[Author] = relationship(back_populates="article_links")

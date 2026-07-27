@@ -11,6 +11,33 @@
   </th>
 {% endmacro %}
 {% block content %}
+{% macro author_group(pairs) %}
+<ul class="author-list">
+  {% for author, pubs in pairs %}
+  <li>
+    <a href="/authors/{{ author.id }}">{{ author.full_name }}</a>
+    <span class="pub-count" title="{{ pubs }} publication{{ '' if pubs == 1 else 's' }} in the library">{{ pubs }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+{% if author_total %}
+<section class="authors-panel">
+  <details open>
+    <summary><span class="panel-title">Authors</span> <span class="count-badge">{{ author_total }}</span></summary>
+    <div class="author-groups">
+      {% if ncnr_authors %}
+      <h3 class="author-group-title">{{ ncnr_label }} <span class="count-badge subtle">{{ ncnr_authors | length }}</span></h3>
+      {{ author_group(ncnr_authors) }}
+      {% endif %}
+      {% if other_authors %}
+      <h3 class="author-group-title">Other affiliations <span class="count-badge subtle">{{ other_authors | length }}</span></h3>
+      {{ author_group(other_authors) }}
+      {% endif %}
+    </div>
+  </details>
+</section>
+{% endif %}
 <h1>{% if sort == "recent" %}Recent additions{% else %}All articles{% endif %}</h1>
 <p class="sort">Click a column header to sort.{% if sort != "recent" %} <a href="/">Reset to date added</a>.{% endif %}</p>
 {% if articles %}

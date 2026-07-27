@@ -25,10 +25,13 @@ def test_dashboard_lists_first_three_authors_with_et_al(
         "10.9999/many-authors", ["Adams", "Baker", "Clark", "Davis", "Evans"],
     )
     page = client.get("/").text
-    assert '<a href="/authors/1">Alex Adams</a>, ' in page
-    assert '<a href="/authors/2">Alex Baker</a>, ' in page
-    assert '<a href="/authors/3">Alex Clark</a> et al.' in page
-    assert "Davis" not in page  # only the first three are shown
+    # The article-table row is below the all-authors panel; scope the truncation
+    # check to that row (the panel deliberately lists every unique author).
+    table = page.split("</section>", 1)[-1]
+    assert '<a href="/authors/1">Alex Adams</a>, ' in table
+    assert '<a href="/authors/2">Alex Baker</a>, ' in table
+    assert '<a href="/authors/3">Alex Clark</a> et al.' in table
+    assert "Davis" not in table  # only the first three show in the article row
 
 
 def test_dashboard_sort_by_author(client, monkeypatch, crossref_message) -> None:

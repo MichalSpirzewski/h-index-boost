@@ -1,14 +1,16 @@
+import re
+import unicodedata
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app import bibtex, db, ingest
+from app import bibtex, contacts, db, ingest
 from app.models import Article, ArticleAuthor, Author
 
 app = FastAPI(title="RefBase")
@@ -21,6 +23,27 @@ app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+
+
+def _affiliation_key(text: str) -> str:
+    """Normalize an affiliation for de-dup: strip case, diacritics, and punctuation."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", ascii_only.lower()).strip()
+
+
+# Any affiliation mentioning NCNR is folded into this single canonical entry,
+# regardless of the street address / spelling variants across PDFs.
+_NCNR_PHRASE = "national centre for nuclear research"
+_NCNR_LABEL = "National Centre for Nuclear Research"
+
+
+def _canonical_affiliation(text: str) -> tuple[str, str]:
+    """Return a (dedup-key, display-text) pair, grouping NCNR variants into one."""
+    key = _affiliation_key(text)
+    if _NCNR_PHRASE in key:
+        return _NCNR_PHRASE, _NCNR_LABEL
+    return key, text
 
 
 def _clean(value: str | None) -> str | None:
@@ -238,8 +261,42 @@ def index(
             return (0, tokens[-1].lower() if tokens else "")
 
         articles.sort(key=first_author_surname, reverse=descending)
+
+    # Unique authors in the library + their (non-hidden) publication counts.
+    pub_count = func.count(ArticleAuthor.article_id)
+    author_stats = session.execute(
+        select(Author, pub_count)
+        .join(ArticleAuthor, ArticleAuthor.author_id == Author.id)
+        .join(Article, Article.id == ArticleAuthor.article_id)
+        .where(Article.hidden.is_(False), Author.merged_into_id.is_(None))
+        .group_by(Author.id)
+        .order_by(pub_count.desc(), Author.full_name)
+    ).all()
+
+    # Authors with at least one NCNR affiliation, to split the panel into groups.
+    ncnr_ids = {
+        row[0]
+        for row in session.execute(
+            select(ArticleAuthor.author_id)
+            .distinct()
+            .where(ArticleAuthor.affiliation.ilike(f"%{_NCNR_LABEL}%"))
+        )
+    }
+    ncnr_authors = [pair for pair in author_stats if pair[0].id in ncnr_ids]
+    other_authors = [pair for pair in author_stats if pair[0].id not in ncnr_ids]
+
     return templates.TemplateResponse(
-        request, "index.html", {"articles": articles, "sort": sort, "order": order}
+        request,
+        "index.html",
+        {
+            "articles": articles,
+            "sort": sort,
+            "order": order,
+            "author_total": len(author_stats),
+            "ncnr_authors": ncnr_authors,
+            "other_authors": other_authors,
+            "ncnr_label": _NCNR_LABEL,
+        },
     )
 
 
@@ -261,11 +318,29 @@ def search_page(request: Request, session: Session = Depends(db.get_db), q: str 
     )
 
 
+_PUB_SORT_KEYS = {
+    "recent": lambda a: a.created_at,
+    "title": lambda a: (a.title or "").lower(),
+    "year": lambda a: a.year or 0,
+    "journal": lambda a: (a.journal or "").lower(),
+}
+
+
 @app.get("/authors/{author_id}")
-def author_detail(request: Request, author_id: int, session: Session = Depends(db.get_db)):
+def author_detail(
+    request: Request,
+    author_id: int,
+    session: Session = Depends(db.get_db),
+    saved: int = 0,
+    sort: str = "recent",
+    order: str = "",
+):
     author = session.get(Author, author_id)
     if author is None:
         raise HTTPException(status_code=404, detail="Author not found")
+    if author.merged_into_id is not None:  # this row was folded into a canonical author
+        canonical = ingest.canonical_author(session, author)
+        return RedirectResponse(f"/authors/{canonical.id}", status_code=301)
     articles = list(
         session.scalars(
             select(Article)
@@ -278,24 +353,78 @@ def author_detail(request: Request, author_id: int, session: Session = Depends(d
             .order_by(Article.created_at.desc())
         )
     )
-    co_authors = {}
+    co_authors: dict[int, Author] = {}
+    joint_counts: dict[int, int] = {}
     topics = {}
+    # Ordered de-dup of this author's affiliations, keyed so near-identical strings
+    # (same text bar case/diacritics/punctuation — PDF encoding noise) collapse.
+    affiliations: dict[str, str] = {}
+    is_ncbj = False  # affiliated with National Centre for Nuclear Research (NCBJ)
     for article in articles:
-        for co_author in article.authors:
-            if co_author.id != author_id:
-                co_authors[co_author.id] = co_author
+        for link in article.author_links:
+            if link.author_id != author_id:
+                co_authors[link.author_id] = link.author
+                joint_counts[link.author_id] = joint_counts.get(link.author_id, 0) + 1
+            elif link.affiliation:
+                for aff in link.affiliation.split("; "):
+                    aff = aff.strip()
+                    if aff:
+                        key, display = _canonical_affiliation(aff)
+                        affiliations.setdefault(key, display)
+                        if key == _NCNR_PHRASE:
+                            is_ncbj = True
         for topic in article.topics:
             topics[topic.id] = topic
+    # Most frequent collaborators first, then alphabetical.
+    co_author_stats = sorted(
+        ((co_authors[cid], joint_counts[cid]) for cid in co_authors),
+        key=lambda pair: (-pair[1], pair[0].full_name),
+    )
+
+    # Sortable publications table (clickable headers). Default: newest first.
+    if sort not in _PUB_SORT_KEYS:
+        sort = "recent"
+    if order not in ("asc", "desc"):
+        order = "desc" if sort in ("recent", "year") else "asc"
+    articles = sorted(articles, key=_PUB_SORT_KEYS[sort], reverse=(order == "desc"))
+
     return templates.TemplateResponse(
         request,
         "author.html",
         {
             "author": author,
             "articles": articles,
-            "co_authors": sorted(co_authors.values(), key=lambda a: a.full_name),
+            "sort": sort,
+            "order": order,
+            "co_author_stats": co_author_stats,
+            "affiliations": list(affiliations.values()),
             "topics": sorted(topics.values(), key=lambda t: t.name),
+            "is_ncbj": is_ncbj,
+            "contact": contacts.get(author.id) if is_ncbj else {},
+            "contact_saved": bool(saved),
         },
     )
+
+
+@app.post("/authors/{author_id}/contact")
+def save_author_contact(
+    author_id: int,
+    session: Session = Depends(db.get_db),
+    email: str | None = Form(None),
+    phone: str | None = Form(None),
+    meeting_link: str | None = Form(None),
+):
+    """Add/update NCBJ auxiliary contact data (persisted to the JSON file)."""
+    author = session.get(Author, author_id)
+    if author is None:
+        raise HTTPException(status_code=404, detail="Author not found")
+    author = ingest.canonical_author(session, author)  # store against the canonical row
+    contacts.save(
+        author.id,
+        author.full_name,
+        {"email": email, "phone": phone, "meeting_link": meeting_link},
+    )
+    return RedirectResponse(f"/authors/{author.id}?saved=1", status_code=303)
 
 
 @app.get("/articles/{article_id}")

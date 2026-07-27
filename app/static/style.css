@@ -31,6 +31,101 @@ button { padding: 0.5rem 1rem; }
   margin: 0 0.25rem 0.15rem 0;
   white-space: nowrap;
 }
+/* Unique-authors panel */
+.authors-panel {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+}
+.authors-panel summary {
+  cursor: pointer;
+  list-style: revert;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.authors-panel summary .panel-title { vertical-align: middle; }
+.authors-panel .author-groups { margin-top: 0.75rem; }
+.author-group-title {
+  margin: 0.75rem 0 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #556;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.author-groups > .author-group-title:first-child { margin-top: 0; }
+.authors-panel .count-badge {
+  display: inline-block;
+  background: #1a4d8f;
+  color: #fff;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.8rem;
+  vertical-align: middle;
+}
+.count-badge.subtle { background: #8595a8; font-weight: 500; }
+.author-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.author-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid #d7e0ea;
+  background: #fff;
+  border-radius: 999px;
+  padding: 0.15rem 0.3rem 0.15rem 0.7rem;
+}
+.author-list a { text-decoration: none; color: #234; }
+.author-list a:hover { text-decoration: underline; }
+.author-list .pub-count {
+  background: #eef2f7;
+  color: #445;
+  border-radius: 999px;
+  min-width: 1.4rem;
+  text-align: center;
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* NCBJ contact card */
+.contact-card {
+  border: 1px solid #d7e0ea;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0 1.5rem;
+  max-width: 32rem;
+}
+.contact-card h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.contact-details { list-style: none; margin: 0 0 0.5rem; padding: 0; }
+.contact-details li { padding: 0.15rem 0; }
+.contact-card .saved-note { color: #1c6b3a; margin: 0 0 0.5rem; font-size: 0.9rem; }
+.contact-editor summary { cursor: pointer; color: #1a4d8f; font-size: 0.9rem; }
+.contact-form { margin-top: 0.6rem; }
+.contact-form label { display: block; margin: 0.4rem 0; font-size: 0.9rem; }
+.contact-form input { width: 100%; max-width: 22rem; padding: 0.3rem; display: block; margin-top: 0.15rem; }
+.contact-form button { margin-top: 0.5rem; }
+
+/* Author affiliations */
+.affiliations {
+  list-style: none;
+  margin: 0.3rem 0 0.8rem;
+  padding: 0;
+  color: #445;
+  font-size: 0.9rem;
+}
+.affiliations li { padding: 0.1rem 0; }
+.affiliations li::before { content: "🏛 "; }
+
 /* Sortable table headers */
 th.sortable { padding: 0; }
 th.sortable a {
