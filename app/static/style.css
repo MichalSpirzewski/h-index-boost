@@ -16,6 +16,13 @@ nav a { text-decoration: none; color: #0a5; }
 mark { background: #ffe58a; padding: 0 0.1rem; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
+/* Dashboard + author publications tables run 50% wider than the text column,
+   breaking out symmetrically so they stay centered. Falls back to full-width
+   on screens too narrow to fit the overflow. */
+.wide-table { width: 150%; max-width: 150%; margin-left: -25%; margin-right: -25%; }
+@media (max-width: 75rem) {
+  .wide-table { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0; }
+}
 form label { display: block; margin: 0.75rem 0; }
 form input[type="text"] { width: 100%; max-width: 30rem; padding: 0.35rem; }
 button { padding: 0.5rem 1rem; }

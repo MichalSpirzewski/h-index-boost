@@ -41,7 +41,7 @@
 <h1>{% if sort == "recent" %}Recent additions{% else %}All articles{% endif %}</h1>
 <p class="sort">Click a column header to sort.{% if sort != "recent" %} <a href="/">Reset to date added</a>.{% endif %}</p>
 {% if articles %}
-<table>
+<table class="wide-table">
   <thead>
     <tr>
       {{ sort_th("title", "Title") }}

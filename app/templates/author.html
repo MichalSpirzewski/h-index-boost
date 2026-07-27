@@ -44,7 +44,7 @@
 
 <h2>Publications ({{ articles | length }})</h2>
 {% if articles %}
-<table>
+<table class="wide-table">
   <thead><tr>{{ sort_th("title", "Title") }}{{ sort_th("year", "Year") }}{{ sort_th("journal", "Journal") }}</tr></thead>
   <tbody>
     {% for article in articles %}
