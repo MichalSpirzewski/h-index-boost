@@ -15,6 +15,14 @@ CONDA_ENV=""
 UVICORN_ARGS=()
 
 case "$HOSTNAME" in
+  DESKTOP-77E0NH2)
+    # WSL dev machine (Michal's home PC). Same networking caveat as PC29UZ3:
+    # binding 0.0.0.0 only reaches WSL's virtual network unless Windows is in
+    # mirrored networking mode or a portproxy rule forwards the port.
+    CONDA_ENV="refbase"
+    UVICORN_ARGS=(--host 0.0.0.0 --port 8000 --reload)
+    ;;
+
   PC29UZ3)
     # WSL dev machine (Michal's laptop). Binding 0.0.0.0 only reaches WSL's
     # own virtual network unless Windows is set to mirrored networking mode

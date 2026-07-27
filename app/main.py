@@ -192,20 +192,44 @@ def article_status(article_id: int, session: Session = Depends(db.get_db)):
 
 # --------------------------------------------------------------------------- pages (minimal until M2)
 
+# Clickable-header sort keys. "recent" is the default (date added); "author"
+# needs the author relationship so it's sorted in Python, the rest in SQL.
+_SORT_COLUMNS = {
+    "recent": Article.created_at,
+    "title": Article.title,
+    "year": Article.year,
+    "journal": Article.journal,
+    "status": Article.status,
+}
+_SORT_KEYS = set(_SORT_COLUMNS) | {"author"}
+
+
 @app.get("/")
-def index(request: Request, session: Session = Depends(db.get_db), sort: str = "recent"):
-    articles = list(
-        session.scalars(
-            select(Article)
-            .where(Article.hidden.is_(False))
-            .options(
-                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
-                selectinload(Article.topics),
-            )
-            .order_by(Article.created_at.desc())
-            .limit(20)
+def index(
+    request: Request,
+    session: Session = Depends(db.get_db),
+    sort: str = "recent",
+    order: str = "",
+):
+    if sort not in _SORT_KEYS:
+        sort = "recent"
+    # Sensible default direction per column: newest-first for date/year, A→Z otherwise.
+    if order not in ("asc", "desc"):
+        order = "desc" if sort in ("recent", "year") else "asc"
+    descending = order == "desc"
+
+    query = (
+        select(Article)
+        .where(Article.hidden.is_(False))
+        .options(
+            selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+            selectinload(Article.topics),
         )
     )
+    column = _SORT_COLUMNS.get(sort, Article.created_at)
+    query = query.order_by(column.desc() if descending else column.asc())
+    articles = list(session.scalars(query.limit(20)))
+
     if sort == "author":
         def first_author_surname(article: Article) -> tuple[int, str]:
             if not article.author_links:
@@ -213,9 +237,9 @@ def index(request: Request, session: Session = Depends(db.get_db), sort: str = "
             tokens = article.author_links[0].author.full_name.split()
             return (0, tokens[-1].lower() if tokens else "")
 
-        articles.sort(key=first_author_surname)
+        articles.sort(key=first_author_surname, reverse=descending)
     return templates.TemplateResponse(
-        request, "index.html", {"articles": articles, "sort": sort}
+        request, "index.html", {"articles": articles, "sort": sort, "order": order}
     )
 
 

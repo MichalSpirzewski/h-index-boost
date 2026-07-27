@@ -1,18 +1,29 @@
 {% extends "base.html" %}
+{#- Sortable column header: clicking sorts ascending, clicking the active one flips
+    direction. Shows ▲/▼ on the active column. -#}
+{% macro sort_th(key, label) %}
+  {%- set active = (sort == key) -%}
+  {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
+  <th class="sortable{% if active %} active{% endif %}">
+    <a href="/?sort={{ key }}&order={{ next_order }}">
+      {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
+    </a>
+  </th>
+{% endmacro %}
 {% block content %}
-<h1>Recent additions</h1>
-<p class="sort">
-  Sort by:
-  {% if sort == "author" %}
-    <a href="/">date added</a> · <strong>author</strong>
-  {% else %}
-    <strong>date added</strong> · <a href="/?sort=author">author</a>
-  {% endif %}
-</p>
+<h1>{% if sort == "recent" %}Recent additions{% else %}All articles{% endif %}</h1>
+<p class="sort">Click a column header to sort.{% if sort != "recent" %} <a href="/">Reset to date added</a>.{% endif %}</p>
 {% if articles %}
 <table>
   <thead>
-    <tr><th>Title</th><th>Authors</th><th>Year</th><th>Journal</th><th>Status</th><th>PDF</th></tr>
+    <tr>
+      {{ sort_th("title", "Title") }}
+      {{ sort_th("author", "Authors") }}
+      {{ sort_th("year", "Year") }}
+      {{ sort_th("journal", "Journal") }}
+      {{ sort_th("status", "Status") }}
+      <th>PDF</th>
+    </tr>
   </thead>
   <tbody>
     {% for article in articles %}
@@ -35,7 +46,14 @@
       </td>
       <td>{{ article.year or "" }}</td>
       <td>{{ article.journal or "" }}</td>
-      <td>{{ article.status }}</td>
+      <td>
+        {%- set status_help = {
+          "ready": "Metadata fetched and the article is fully processed.",
+          "pending": "Still fetching metadata in the background — refresh shortly.",
+          "metadata_failed": "Crossref lookup failed; only the PDF / basic info is available."
+        } -%}
+        <span class="status status-{{ article.status }}" title="{{ status_help.get(article.status, article.status) }}">{{ article.status }}</span>
+      </td>
       <td class="row-actions">
         {% if article.pdf_path %}
         <a class="btn" href="/articles/{{ article.id }}/pdf" target="_blank" rel="noopener">View</a>
@@ -46,6 +64,12 @@
     {% endfor %}
   </tbody>
 </table>
+<p class="legend">
+  <strong>Status:</strong>
+  <span class="status status-ready">ready</span> fully processed ·
+  <span class="status status-pending">pending</span> metadata still loading ·
+  <span class="status status-metadata_failed">metadata_failed</span> Crossref lookup failed (PDF still available)
+</p>
 {% else %}
 <p>No articles yet. <a href="/upload">Add the first one.</a></p>
 {% endif %}

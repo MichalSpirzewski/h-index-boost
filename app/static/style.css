@@ -31,6 +31,33 @@ button { padding: 0.5rem 1rem; }
   margin: 0 0.25rem 0.15rem 0;
   white-space: nowrap;
 }
+/* Sortable table headers */
+th.sortable { padding: 0; }
+th.sortable a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+th.sortable a:hover { background: #f2f5f8; }
+th.sortable.active a { color: #1a4d8f; }
+th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; color: #1a4d8f; }
+
+/* Ingestion status badges */
+.status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.status-ready { background: #e7f5ec; color: #1c6b3a; border-color: #bfe3cc; }
+.status-pending { background: #fff6e0; color: #8a6100; border-color: #f0dca0; }
+.status-metadata_failed { background: #fde8e8; color: #9b2020; border-color: #f2c2c2; }
+.legend { color: #666; font-size: 0.85rem; margin-top: 0.6rem; }
+
 .row-actions { white-space: nowrap; }
 .btn {
   display: inline-block;
