@@ -183,3 +183,20 @@ def test_article_pdf_view_is_inline_download_is_attachment(client) -> None:
     download = client.get(f"/articles/{article_id}/pdf?download=1")
     assert download.status_code == 200
     assert download.headers["content-disposition"].startswith("attachment;")
+
+
+def test_article_page_offers_a_word_download(client) -> None:
+    article_id = client.post("/api/ingest", data={"doi": "10.1038/nphys1170"}).json()["article_id"]
+
+    page = client.get(f"/articles/{article_id}").text
+    assert f'href="/articles/{article_id}/word-xml"' in page
+
+    resp = client.get(f"/articles/{article_id}/word-xml")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/xml")
+    assert 'filename="smith2009measured.xml"' in resp.headers["content-disposition"]
+    assert "<b:Tag>smith2009measured</b:Tag>" in resp.text
+
+
+def test_word_xml_404_for_unknown_article(client) -> None:
+    assert client.get("/articles/999/word-xml").status_code == 404

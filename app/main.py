@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app import bibtex, contacts, db, ingest
+from app import bibtex, contacts, db, ingest, word_xml
 from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
 
 app = FastAPI(title="RefBase")
@@ -34,6 +34,10 @@ templates.env.filters["short_name"] = _short_author_name
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    # Make the hard-coded alias table retroactive: authors stored before an alias
+    # was added would otherwise stay split forever.
+    with db.SessionLocal() as session:
+        ingest.apply_name_aliases(session)
 
 
 def _affiliation_key(text: str) -> str:
@@ -461,7 +465,6 @@ def author_detail(
 def save_author_contact(
     author_id: int,
     session: Session = Depends(db.get_db),
-    email: str | None = Form(None),
     phone: str | None = Form(None),
     meeting_link: str | None = Form(None),
 ):
@@ -473,7 +476,7 @@ def save_author_contact(
     contacts.save(
         author.id,
         author.full_name,
-        {"email": email, "phone": phone, "meeting_link": meeting_link},
+        {"phone": phone, "meeting_link": meeting_link},
     )
     return RedirectResponse(f"/authors/{author.id}?saved=1", status_code=303)
 
@@ -522,6 +525,20 @@ def article_bibtex(article_id: int, session: Session = Depends(db.get_db)):
         bibtex.article_bibtex(article),
         media_type="application/x-bibtex",
         headers={"Content-Disposition": f'attachment; filename="article-{article_id}.bib"'},
+    )
+
+
+@app.get("/articles/{article_id}/word-xml", response_class=PlainTextResponse)
+def article_word_xml(article_id: int, session: Session = Depends(db.get_db)):
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return PlainTextResponse(
+        word_xml.article_word_xml(article),
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": f'attachment; filename="{word_xml.xml_filename(article)}"'
+        },
     )
 
 

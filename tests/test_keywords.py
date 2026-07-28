@@ -106,3 +106,42 @@ def test_uploaded_pdf_keywords_become_topics_and_dashboard_chips(client) -> None
     dashboard = client.get("/").text
     assert '<span class="chip">neutronics</span>' in dashboard
     assert '<span class="chip">reactor safety</span>' in dashboard
+
+
+def test_keywords_set_vertically_one_per_line() -> None:
+    # Regression: Elsevier prints the label on its own line with the keywords
+    # stacked underneath, so the old same-line-only capture found nothing.
+    pdf = _make_pdf(
+        text=(
+            "A Paper Title\n"
+            "Keywords:\n"
+            "MHD pumps\n"
+            "Dual Fluid Reactor\n"
+            "Optimization procedure\n"
+            "a b s t r a c t\n"
+            "The metallic version of the reactor uses a liquid eutectic."
+        )
+    )
+    assert extract_keywords_from_pdf(pdf) == [
+        "MHD pumps",
+        "Dual Fluid Reactor",
+        "Optimization procedure",
+    ]
+
+
+def test_vertical_keyword_list_stops_at_the_abstract() -> None:
+    pdf = _make_pdf(
+        text="Keywords:\nalpha\nbeta\nAbstract\ngamma should not be a keyword\n"
+    )
+    assert extract_keywords_from_pdf(pdf) == ["alpha", "beta"]
+
+
+def test_inline_keywords_ignore_the_lines_below_them() -> None:
+    # The vertical fallback must not fire when the label's own line has content,
+    # or body text would leak in as keywords.
+    pdf = _make_pdf(text="Keywords: alpha, beta\nBody text that is not a keyword\n")
+    assert extract_keywords_from_pdf(pdf) == ["alpha", "beta"]
+
+
+def test_split_keywords_treats_newlines_as_separators() -> None:
+    assert split_keywords("alpha\nbeta, gamma") == ["alpha", "beta", "gamma"]

@@ -1,10 +1,14 @@
 """Auxiliary, hand-curated contact data for NCBJ authors.
 
 Deliberately kept out of the ingest-managed database: this is manually entered,
-may hold personal data (email, phone, meeting link), and lives in a gitignored
-JSON file (`data/author_contacts.json`). Keyed by canonical author id.
+may hold personal data (phone, meeting link), and lives in a gitignored JSON file
+(`data/author_contacts.json`). Keyed by canonical author id.
 
-    { "2": {"name": "…", "email": "…", "phone": "…", "meeting_link": "…"} }
+    { "2": {"name": "…", "phone": "…", "meeting_link": "…"} }
+
+No e-mail field: addresses used to be harvested from PDFs, but the store survives
+database rebuilds while author ids do not, so entries silently came to point at
+the wrong people. Nothing here is derived from ingest any more — manual only.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import tempfile
 
 from app import db
 
-FIELDS = ("email", "phone", "meeting_link")
+FIELDS = ("phone", "meeting_link")
 
 
 def _path():

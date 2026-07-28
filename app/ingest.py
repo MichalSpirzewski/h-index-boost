@@ -8,9 +8,7 @@ import html
 import json
 import os
 import re
-import unicodedata
 import uuid
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +18,7 @@ from rapidfuzz import fuzz
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import contacts, db
+from app import db
 from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
 
 CROSSREF_MAILTO = os.environ.get("CROSSREF_MAILTO", "guhard@gmail.com")
@@ -151,18 +149,27 @@ def extract_abstract_from_pdf(pdf_bytes: bytes) -> str | None:
 
 # --------------------------------------------------------------------------- keywords
 
+# The label plus whatever follows it on the same line — which is empty when the
+# publisher sets the keywords vertically, one per line (common in Elsevier PDFs).
 _KEYWORD_LINE_RE = re.compile(
-    r"^[ \t]*key\s*words?\s*[:\-—–][ \t]*(.+)$", re.IGNORECASE | re.MULTILINE
+    r"^[ \t]*key\s*words?\s*[:\-—–][ \t]*(.*)$", re.IGNORECASE | re.MULTILINE
+)
+# Where a vertical keyword list ends: the abstract heading, a section number, etc.
+_KEYWORD_BLOCK_END_RE = re.compile(
+    r"^(a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|a\s*r\s*t\s*i\s*c\s*l\s*e|highlights?"
+    r"|©|https?:|\d+\.\s|introduction)\b",
+    re.IGNORECASE,
 )
 _MAX_KEYWORDS = 10
 _MAX_KEYWORD_LEN = 60
+_MAX_KEYWORD_LINES = 12
 
 
 def split_keywords(raw: str) -> list[str]:
     """Split an author-keyword string on common separators; dedupe case-insensitively."""
     keywords: list[str] = []
     seen: set[str] = set()
-    for part in re.split(r"[;,·•]", raw):
+    for part in re.split(r"[;,·•\n]", raw):
         keyword = part.strip().rstrip(".").strip()
         if not keyword or len(keyword) > _MAX_KEYWORD_LEN:
             continue
@@ -171,6 +178,27 @@ def split_keywords(raw: str) -> list[str]:
         seen.add(keyword.lower())
         keywords.append(keyword)
     return keywords[:_MAX_KEYWORDS]
+
+
+def keywords_after_label(text: str) -> list[str]:
+    """Author keywords following a 'Keywords:' label, inline or set one per line."""
+    match = _KEYWORD_LINE_RE.search(text)
+    if not match:
+        return []
+    inline = match.group(1).strip()
+    if inline:
+        return split_keywords(inline)
+    # Nothing on the label's own line: read the vertical list underneath it. The
+    # per-keyword length cap in split_keywords discards prose if we overshoot.
+    collected: list[str] = []
+    for line in text[match.end():].splitlines()[:_MAX_KEYWORD_LINES]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _KEYWORD_BLOCK_END_RE.match(stripped):
+            break
+        collected.append(stripped)
+    return split_keywords("\n".join(collected))
 
 
 def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
@@ -186,11 +214,9 @@ def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
             if keywords:
                 return keywords
         for page in doc.pages(0, min(2, doc.page_count)):
-            match = _KEYWORD_LINE_RE.search(page.get_text())
-            if match:
-                keywords = split_keywords(match.group(1))
-                if keywords:
-                    return keywords
+            keywords = keywords_after_label(page.get_text())
+            if keywords:
+                return keywords
     return []
 
 
@@ -198,10 +224,13 @@ def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
 
 # Institution words that mark a line as an affiliation rather than an author list.
 # Stems (no trailing \b) so "Universi" also matches University/Universität/Università.
+# "Academy/Academia/Akademia" are spelled out rather than stemmed to "Academ",
+# which would also match the "Academic Editor:" line in MDPI front matter and
+# start the block on the journal masthead instead of the real affiliation.
 _AFF_KEYWORD_RE = re.compile(
     r"\b(Universi|Univerz|Institut|Instytut|Centre|Center|Centrum|Department"
-    r"|Laborator|Faculty|Fakult|School|College|Academ|Politech|Politecnico"
-    r"|Ministr|Hospital|Wydział|Division|GmbH|Research)",
+    r"|Laborator|Faculty|Fakult|School|College|Academy|Academia|Akadem"
+    r"|Politech|Politecnico|Ministr|Hospital|Wydział|Division|GmbH|Research)",
     re.IGNORECASE,
 )
 # An affiliation line prefixed by a superscript marker, e.g. "a National Centre…"
@@ -312,78 +341,6 @@ def extract_author_affiliations(
     return ["; ".join(distinct)] * len(author_names)
 
 
-# --------------------------------------------------------------------------- emails
-
-NCBJ_EMAIL_DOMAIN = "@ncbj.gov.pl"
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-
-
-# Latin letters that carry no NFKD decomposition, so diacritic-stripping misses them.
-_TRANSLIT = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ħ": "h", "ß": "ss"})
-
-
-def _ascii_fold(text: str) -> str:
-    """Lowercase and strip diacritics so 'Sierchuła' matches 'sierchula'."""
-    decomposed = unicodedata.normalize("NFKD", text)
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return stripped.lower().translate(_TRANSLIT)
-
-
-def extract_ncbj_emails(pdf_bytes: bytes) -> list[str]:
-    """Unique @ncbj.gov.pl e-mails from the first two pages, in order of appearance."""
-    try:
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            text = "\n".join(doc[i].get_text() for i in range(min(2, doc.page_count)))
-    except Exception:
-        return []
-    seen: dict[str, None] = {}
-    for match in _EMAIL_RE.findall(text):
-        email = match.lower()
-        if email.endswith(NCBJ_EMAIL_DOMAIN):
-            seen.setdefault(email, None)
-    return list(seen)
-
-
-def correlate_emails_to_authors(
-    emails: list[str], author_names: list[str]
-) -> dict[str, str]:
-    """Match NCBJ e-mails to authors via the 'firstname.lastname' local part.
-
-    Returns {author_name: email}. Colliding surnames (e.g. two Skrzypeks) are
-    disambiguated by the given-name token; genuinely ambiguous ones are skipped.
-    """
-    by_family: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for name in author_names:
-        parts = name.split()
-        if not parts:
-            continue
-        by_family[_ascii_fold(parts[-1])].append((name, _ascii_fold(parts[0])))
-
-    result: dict[str, str] = {}
-    for email in emails:
-        tokens = [t for t in re.split(r"[._\-]+", email.split("@")[0]) if t]
-        if not tokens:
-            continue
-        candidates = by_family.get(_ascii_fold(tokens[-1]))
-        if not candidates:
-            continue
-        if len(candidates) == 1:
-            chosen = candidates[0][0]
-        else:  # same surname → disambiguate on the given-name token
-            first_tok = _ascii_fold(tokens[0])
-            chosen = next(
-                (
-                    name
-                    for name, first in candidates
-                    if first and (first.startswith(first_tok) or first_tok.startswith(first))
-                ),
-                None,
-            )
-        if chosen:
-            result.setdefault(chosen, email)
-    return result
-
-
 # --------------------------------------------------------------------------- storage
 
 def save_pdf(pdf_bytes: bytes, doi: str | None) -> str:
@@ -489,6 +446,39 @@ _NAME_ALIASES = {
 
 def _apply_name_alias(full_name: str) -> str:
     return _NAME_ALIASES.get(full_name.strip().casefold(), full_name)
+
+
+def apply_name_aliases(session: Session) -> int:
+    """Fold already-stored variant spellings into their canonical author.
+
+    `_apply_name_alias` only guards the write path, so authors ingested *before* an
+    alias was added stay split — the reason a hard-coded alias looks like it does
+    nothing. Runs at startup to make the alias table retroactive. Returns the number
+    of authors merged away.
+    """
+    merged = 0
+    for variant, canonical_name in _NAME_ALIASES.items():
+        sources = [
+            author
+            for author in session.scalars(select(Author))
+            if author.full_name.strip().casefold() == variant
+            and author.merged_into_id is None
+        ]
+        if not sources:
+            continue
+        target = session.scalar(
+            select(Author).where(Author.full_name == canonical_name).order_by(Author.id)
+        )
+        for source in sources:
+            if target is None:  # only the variant exists — just rename it in place
+                source.full_name = canonical_name
+                target = source
+                continue
+            merge_authors(session, source, target)
+            merged += 1
+    if merged:
+        session.commit()
+    return merged
 
 
 def _get_or_create_author(session: Session, full_name: str, orcid: str | None) -> Author:
@@ -682,51 +672,6 @@ def apply_pdf_affiliations(session: Session, article: Article) -> int:
     return filled
 
 
-def apply_pdf_emails(session: Session, article: Article) -> int:
-    """Correlate @ncbj.gov.pl e-mails in the PDF to authors and store them as contacts.
-
-    Only fills an author's contact e-mail when it's currently empty, so a manually
-    entered address is never clobbered. Returns the number of e-mails newly stored.
-    """
-    if not article.pdf_path:
-        return 0
-    links = session.scalars(
-        select(ArticleAuthor)
-        .where(ArticleAuthor.article_id == article.id)
-        .order_by(ArticleAuthor.position)
-    ).all()
-    if not links:
-        return 0
-    try:
-        pdf_bytes = Path(article.pdf_path).read_bytes()
-    except OSError:
-        return 0
-
-    emails = extract_ncbj_emails(pdf_bytes)
-    if not emails:
-        return 0
-
-    id_by_name = {session.get(Author, link.author_id).full_name: link.author_id for link in links}
-    correlated = correlate_emails_to_authors(emails, list(id_by_name))
-    filled = 0
-    for name, email in correlated.items():
-        author_id = id_by_name[name]
-        existing = contacts.get(author_id)
-        if existing.get("email"):
-            continue  # keep whatever's already there (manual or previously derived)
-        contacts.save(
-            author_id,
-            name,
-            {
-                "email": email,
-                "phone": existing.get("phone"),
-                "meeting_link": existing.get("meeting_link"),
-            },
-        )
-        filled += 1
-    return filled
-
-
 def _backfill_abstract(article: Article, pdf_bytes: bytes) -> None:
     """Fill a missing abstract from the PDF; never override a real one from Crossref/S2."""
     if article.abstract:
@@ -758,7 +703,6 @@ def rescan_article_pdf(session: Session, article: Article) -> list[str]:
     session.commit()
     keywords = add_pdf_keywords(session, article, pdf_bytes)
     apply_pdf_affiliations(session, article)
-    apply_pdf_emails(session, article)
     return keywords
 
 
@@ -819,11 +763,9 @@ def process_article(article_id: int) -> None:
         except Exception:
             pass
 
-        # Fill any author affiliations Crossref didn't provide from the PDF header,
-        # and correlate NCBJ corresponding-author e-mails to their authors.
+        # Fill any author affiliations Crossref didn't provide from the PDF header.
         try:
             apply_pdf_affiliations(session, article)
-            apply_pdf_emails(session, article)
         except Exception:
             pass
 

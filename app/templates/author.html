@@ -19,13 +19,12 @@
 {% endif %}
 
 {% if is_ncbj %}
-{% set has_contact = contact.email or contact.phone or contact.meeting_link %}
+{% set has_contact = contact.phone or contact.meeting_link %}
 <section class="contact-card">
   <h2>NCBJ contact</h2>
   {% if contact_saved %}<p class="saved-note">✓ Contact saved.</p>{% endif %}
   {% if has_contact %}
   <ul class="contact-details">
-    {% if contact.email %}<li>✉ <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></li>{% endif %}
     {% if contact.phone %}<li>☎ <a href="tel:{{ contact.phone }}">{{ contact.phone }}</a></li>{% endif %}
     {% if contact.meeting_link %}<li>🎥 <a href="{{ contact.meeting_link }}" target="_blank" rel="noopener">Join meeting</a></li>{% endif %}
   </ul>
@@ -33,7 +32,6 @@
   <details class="contact-editor"{% if not has_contact %} open{% endif %}>
     <summary>{{ "Edit contact details" if has_contact else "Add contact details" }}</summary>
     <form method="post" action="/authors/{{ author.id }}/contact" class="contact-form">
-      <label>Email <input type="email" name="email" value="{{ contact.email or '' }}" placeholder="name@ncbj.gov.pl"></label>
       <label>Phone <input type="text" name="phone" value="{{ contact.phone or '' }}" placeholder="+48 …"></label>
       <label>Meeting link <input type="url" name="meeting_link" value="{{ contact.meeting_link or '' }}" placeholder="https://…"></label>
       <button type="submit">Save contact</button>

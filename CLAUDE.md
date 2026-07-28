@@ -4,7 +4,7 @@ Project brief for Claude Code. This file is the source of truth for scope, stack
 
 ## What this app is
 
-A self-hosted, no-login reference library for a research group (~30–40 people). Users add scientific papers (PDF upload and/or DOI/publisher link). The app extracts/fetches metadata via public APIs, stores everything in a shared database, and presents a browsable dashboard of articles, authors, and topics. Any article's PDF and BibTeX can be downloaded; multiple articles can be exported as one merged `.bib` file.
+A self-hosted, no-login reference library for a research group (~30–40 people). Users add scientific papers (PDF upload and/or DOI/publisher link). The app extracts/fetches metadata via public APIs, stores everything in a shared database, and presents a browsable dashboard of articles, authors, and topics. Any article's PDF and BibTeX can be downloaded; multiple articles can be exported as one merged `.bib` file, or as one XML file importable into Microsoft Word's built-in bibliography manager (the group has both LaTeX and Word writers).
 
 Think: minimal self-hosted Zotero for a group, without accounts.
 
@@ -80,6 +80,7 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 - `GET /` — dashboard: recent additions, top authors (article count), topic chips, search box (FTS5).
 - `GET /articles` — paginated table (50/page), filters: topic, author, year, full-text query. Row actions: view, download PDF, download BibTeX, select-checkbox.
 - `POST /export/bibtex` — selected article ids → single merged `.bib` download. Also `GET /articles/{id}/bibtex` for one.
+- `POST /export/word-xml` — same selection → single `.xml` for Microsoft Word's Source Manager. Also `GET /articles/{id}/word-xml` for one.
 - `GET /articles/{id}` — detail: metadata, authors, topics, abstract, PDF download, "added by".
 - `GET /authors/{id}` — author's articles, co-authors, topics.
 - `GET /topics/{id}` — articles + most active authors in the topic.
@@ -87,6 +88,15 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 - `POST /articles/{id}/hide` — soft delete. No hard deletes anywhere.
 
 BibTeX generation: cite key = `firstauthorlastnameYEARfirstword` (deduplicate with `a`,`b` suffixes within an export). Escape special characters; keep Unicode (biblatex-friendly) but escape `{`, `}`, `%`, `&`, `#`.
+
+Word export: many people in the group write in Microsoft Word, not LaTeX. Word has a built-in bibliography manager (References → Manage Sources) that imports an XML file in the `b:Sources` schema, so the same selection that produces a `.bib` also produces a `.xml` the user imports once and then cites natively from Word. Generate it from the same stored Crossref JSON, in `word_xml.py`, mirroring `bibtex.py`'s structure. Notes:
+
+- Namespace `http://schemas.openxmlformats.org/officeDocument/2006/bibliography`, root `<b:Sources>`, one `<b:Source>` per article.
+- `b:Tag` = the BibTeX cite key (reuse `make_cite_key`, same a/b/c dedup) so citations stay consistent between Word and LaTeX users.
+- `b:SourceType` mapped from Crossref `type`: `JournalArticle`, `ConferenceProceedings`, `BookSection`, `Book`, `Report`, otherwise `Misc`.
+- Authors go in `<b:Author><b:Author><b:NameList>` with `b:Last`/`b:First` per person — split from Crossref `family`/`given`, never from a joined string.
+- Use `xml.etree.ElementTree` from the stdlib; it handles XML escaping, so no hand-rolled escaping. Keep Unicode as-is, UTF-8 declaration.
+- No Word add-in / "cite while you write" plugin in v1 — that would be a separate Office.js or VBA project outside this stack. File import only.
 
 ## Conventions for Claude Code
 
@@ -98,13 +108,14 @@ BibTeX generation: cite key = `firstauthorlastnameYEARfirstword` (deduplicate wi
     db.py              # engine, session, WAL pragma, FTS setup
     ingest.py          # pipeline (DOI extraction, Crossref, S2, Unpaywall)
     bibtex.py          # JSON → BibTeX
+    word_xml.py        # JSON → Word Source Manager XML
     templates/         # Jinja2 + HTMX partials
     static/
   data/                # sqlite file + pdfs/ (gitignored)
   tests/
   ```
 - Type hints everywhere; `ruff` for lint/format; `pytest` for tests.
-- Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping. Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
+- Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping, JSON→Word XML field mapping (author name splitting, source-type mapping, well-formed output). Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
 - Keep external API calls isolated in `ingest.py` behind small functions so they're mockable.
 - No auth, no user table, no sessions. `added_by` is a plain string.
 - Don't add dependencies beyond the stack table without asking.
@@ -113,7 +124,7 @@ BibTeX generation: cite key = `firstauthorlastnameYEARfirstword` (deduplicate wi
 
 1. **M1 — Core ingest + storage:** models, DB with WAL+FTS, `/api/ingest` full pipeline, dedup, tests for DOI handling.
 2. **M2 — Library UI:** articles list with filters/pagination/search, article detail, PDF download, upload page with processing state.
-3. **M3 — Dashboard & exports:** home dashboard, author/topic pages, single + merged BibTeX export.
+3. **M3 — Dashboard & exports:** home dashboard, author/topic pages, single + merged BibTeX export, single + merged Word Source Manager XML export (same selection, second download button).
 4. **M4 — Polish:** soft delete, "added by" localStorage, duplicate-title warnings, Unpaywall OA fetch, basic error pages.
 
 Start with M1. After each milestone, run tests and show a short summary of what changed before moving on.

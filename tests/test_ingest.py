@@ -46,6 +46,62 @@ def test_hardcoded_name_alias_groups_nowak(client) -> None:
         assert a.orcid == "0000-0002-8949-2720"  # ORCID preserved from the variant
 
 
+def test_name_alias_is_applied_retroactively(client) -> None:
+    """Authors stored before an alias existed must still collapse.
+
+    Regression: _apply_name_alias only guards the write path, so a hard-coded alias
+    looked like it did nothing against a library ingested earlier — the variants
+    stayed as two rows, each with its own article.
+    """
+    from app import db, ingest
+    from app.models import Article, ArticleAuthor, Author
+
+    with db.SessionLocal() as session:
+        # Simulate the pre-alias state: two separate rows, one article each.
+        variant = Author(full_name="Mateusz Marek Nowak", orcid="0000-0002-8949-2720")
+        canonical = Author(full_name="Mateusz Nowak")
+        session.add_all([variant, canonical])
+        session.flush()
+        for author, doi in ((variant, "10.1/variant"), (canonical, "10.1/canonical")):
+            article = Article(doi=doi, status="ready")
+            session.add(article)
+            session.flush()
+            session.add(
+                ArticleAuthor(article_id=article.id, author_id=author.id, position=0)
+            )
+        session.commit()
+        variant_id, canonical_id = variant.id, canonical.id
+
+    with db.SessionLocal() as session:
+        assert ingest.apply_name_aliases(session) == 1
+
+    with db.SessionLocal() as session:
+        merged = session.get(Author, variant_id)
+        target = session.get(Author, canonical_id)
+        assert merged.merged_into_id == canonical_id  # soft merge, row still there
+        assert target.orcid == "0000-0002-8949-2720"  # ORCID carried over
+        articles = session.scalars(
+            select(ArticleAuthor.article_id).where(
+                ArticleAuthor.author_id == canonical_id
+            )
+        ).all()
+        assert len(articles) == 2  # both papers now credited to one author
+
+
+def test_name_alias_backfill_is_idempotent(client) -> None:
+    from app import db, ingest
+    from app.models import Author
+
+    with db.SessionLocal() as session:
+        session.add(Author(full_name="Mateusz Marek Nowak"))
+        session.commit()
+
+    with db.SessionLocal() as session:
+        ingest.apply_name_aliases(session)
+    with db.SessionLocal() as session:
+        assert ingest.apply_name_aliases(session) == 0  # nothing left to merge
+
+
 def test_ingest_duplicate_doi_is_soft(client) -> None:
     first = client.post("/api/ingest", data={"doi": "10.1038/nphys1170"}).json()
     second = client.post("/api/ingest", data={"doi": "doi:10.1038/NPHYS1170"})

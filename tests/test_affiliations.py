@@ -1,10 +1,6 @@
 import fitz
 
-from app.ingest import (
-    correlate_emails_to_authors,
-    extract_author_affiliations,
-    extract_ncbj_emails,
-)
+from app.ingest import extract_author_affiliations
 
 
 def _make_pdf(text: str) -> bytes:
@@ -71,36 +67,32 @@ def test_empty_author_list() -> None:
     assert extract_author_affiliations(pdf, []) == []
 
 
-def test_extract_ncbj_emails_only() -> None:
+def test_academic_editor_masthead_is_not_an_affiliation() -> None:
+    # Regression: MDPI front matter starts with "Academic Editor: …", which used
+    # to match the "Academ" stem, open the affiliation block on the masthead and
+    # then stop it at the "Article" heading — losing the real affiliation below.
     pdf = _make_pdf(
-        "Title\nAuthors\n"
-        "E-mail addresses: piotr.prusinski@ncbj.gov.pl (P. Prusinski), "
-        "slawomir.kubacki@pw.edu.pl (S. Kubacki).\nAbstract\nBody."
+        "Academic Editor: Francesco Nocera\n"
+        "Citation: Spirzewski, M.; Nowak,\n"
+        "M.M. A Similarity-Based Scaling\n"
+        "18, 5935. https://doi.org/10.3390/\n"
+        "Article\n"
+        "A Similarity-Based Scaling Methodology\n"
+        "Michal Spirzewski and Mateusz Nowak\n"
+        "National Centre for Nuclear Research, Otwock-Swierk, Poland\n"
+        "Abstract\nBody text."
     )
-    assert extract_ncbj_emails(pdf) == ["piotr.prusinski@ncbj.gov.pl"]
+    affs = extract_author_affiliations(pdf, ["Michal Spirzewski", "Mateusz Nowak"])
+    assert all(a == "National Centre for Nuclear Research, Otwock-Swierk, Poland" for a in affs)
 
 
-def test_correlate_email_by_local_part() -> None:
-    corr = correlate_emails_to_authors(
-        ["michal.spirzewski@ncbj.gov.pl"], ["Michał Spirzewski", "Henryk Anglart"]
+def test_academy_of_sciences_still_counts_as_an_affiliation() -> None:
+    # The narrowed pattern must keep matching genuine academies.
+    pdf = _make_pdf(
+        "A Paper Title\nJan Kowalski\n"
+        "Polish Academy of Sciences, Warsaw, Poland\n"
+        "Abstract\nBody."
     )
-    assert corr == {"Michał Spirzewski": "michal.spirzewski@ncbj.gov.pl"}
-
-
-def test_correlate_handles_polish_l_stroke() -> None:
-    # 'ł' has no NFKD decomposition; the fold must transliterate it to 'l'.
-    corr = correlate_emails_to_authors(
-        ["jakub.sierchula@ncbj.gov.pl"], ["Jakub Sierchuła"]
-    )
-    assert corr == {"Jakub Sierchuła": "jakub.sierchula@ncbj.gov.pl"}
-
-
-def test_correlate_disambiguates_shared_surname() -> None:
-    corr = correlate_emails_to_authors(
-        ["maciej.skrzypek@ncbj.gov.pl", "eleonora.skrzypek@ncbj.gov.pl"],
-        ["Maciej Skrzypek", "Eleonora Skrzypek"],
-    )
-    assert corr == {
-        "Maciej Skrzypek": "maciej.skrzypek@ncbj.gov.pl",
-        "Eleonora Skrzypek": "eleonora.skrzypek@ncbj.gov.pl",
-    }
+    assert extract_author_affiliations(pdf, ["Jan Kowalski"]) == [
+        "Polish Academy of Sciences, Warsaw, Poland"
+    ]
