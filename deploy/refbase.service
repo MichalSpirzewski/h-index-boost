@@ -1,0 +1,38 @@
+# systemd unit for the RefBase app process. Caddy terminates TLS in front of it,
+# so uvicorn binds to loopback only and never speaks to the network directly.
+#
+#   sudo cp deploy/refbase.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now refbase
+
+[Unit]
+Description=RefBase - shared research citation library
+After=network.target
+
+[Service]
+Type=exec
+User=refbase
+Group=refbase
+WorkingDirectory=/srv/refbase
+Environment=REFBASE_DATA_DIR=/srv/refbase/data
+
+# --host 127.0.0.1: the plain-HTTP port must not be reachable from the LAN, or
+#   users could bypass TLS by hitting :8000 directly.
+# --proxy-headers: trust X-Forwarded-* so logs show the real client address
+#   instead of 127.0.0.1. Restricted to the proxy's own address, since these
+#   headers are trivially spoofed by anything allowed to set them.
+ExecStart=/srv/refbase/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 \
+    --proxy-headers --forwarded-allow-ips=127.0.0.1
+
+Restart=on-failure
+RestartSec=5
+
+# The app writes only under its data dir (SQLite + data/pdfs).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/refbase/data
+
+[Install]
+WantedBy=multi-user.target

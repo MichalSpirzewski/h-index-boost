@@ -1,0 +1,39 @@
+# RefBase behind Caddy on the NCBJ internal network.
+#
+# Caddy normally gets certificates from Let's Encrypt automatically, but that
+# needs the host to be reachable from the internet on port 80 (HTTP-01). An
+# internal-only server never is, so the certificate is supplied by hand below.
+#
+# Replace the hostname with the name that is actually in NCBJ DNS. It must match
+# a SAN in the certificate — see deploy/README.md for what to ask IT for.
+
+refbase.ncbj.gov.pl {
+	# Certificate issued by the NCBJ internal CA.
+	# fullchain.pem = leaf certificate FOLLOWED BY the CA's intermediates. A
+	# leaf-only file makes some clients (curl, Java, older Android) fail while
+	# Firefox and Chrome still work, which is a confusing way to find out.
+	tls /etc/ssl/refbase/fullchain.pem /etc/ssl/refbase/privkey.pem
+
+	encode zstd gzip
+
+	# Uploads: the largest PDF currently in the library is ~17 MB.
+	request_body {
+		max_size 100MB
+	}
+
+	# Static assets are versionless, so keep the window modest — a long max-age
+	# would strand users on a stale style.css / export.js after a deploy.
+	@static path /static/*
+	header @static Cache-Control "public, max-age=3600"
+
+	reverse_proxy 127.0.0.1:8000
+
+	log {
+		output file /var/log/caddy/refbase.log
+	}
+}
+
+# Anyone typing the bare hostname gets bounced to HTTPS.
+http://refbase.ncbj.gov.pl {
+	redir https://{host}{uri} permanent
+}
