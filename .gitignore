@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 venv/
 data/*
-!data/pdfs/
+data/pdfs/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/

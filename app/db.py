@@ -72,6 +72,8 @@ def init_db() -> None:
             conn.execute(
                 text("ALTER TABLE articles ADD COLUMN cite_first BOOLEAN DEFAULT 0")
             )
+        if article_cols and "citation_examples" not in article_cols:
+            conn.execute(text("ALTER TABLE articles ADD COLUMN citation_examples TEXT"))
 
         for column in ("published_date", "online_date"):
             if article_cols and column not in article_cols:

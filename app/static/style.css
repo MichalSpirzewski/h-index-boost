@@ -21,7 +21,47 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee
    on screens too narrow to fit the overflow. */
 .wide-table { width: 150%; max-width: 150%; margin-left: -25%; margin-right: -25%; }
 @media (max-width: 75rem) {
-  .wide-table { width: 100%; max-width: 100%; margin-left: 0; margin-right: 0; }
+  .wide-table {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    table-layout: fixed;
+  }
+
+  /* Keep the compact metadata columns predictable and give the title most of
+     the fluid space. Long titles can then wrap instead of widening the table. */
+  .wide-table .article-col-select { width: 4%; }
+  .wide-table .article-col-title { width: 29%; }
+  .wide-table .article-col-authors { width: 16%; }
+  .wide-table .article-col-published,
+  .wide-table .article-col-online { width: 9%; }
+  .wide-table .article-col-journal { width: 12%; }
+  .wide-table .article-col-status { width: 9%; }
+  .wide-table .article-col-cite,
+  .wide-table .article-col-pdf { width: 6%; }
+
+  .wide-table th,
+  .wide-table td {
+    overflow-wrap: anywhere;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+  }
+  .wide-table th.sortable a {
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+    white-space: normal;
+  }
+  .wide-table .article-title-cell { overflow-wrap: anywhere; }
+  .wide-table .date-cell { white-space: normal; }
+  .wide-table td.row-actions { white-space: normal; }
+  .wide-table td.row-actions .btn {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    margin: 0 0 0.25rem;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+  }
 }
 form label { display: block; margin: 0.75rem 0; }
 /* Drag-and-drop PDF picker */
@@ -137,7 +177,11 @@ button { padding: 0.5rem 1rem; }
   margin: 1rem 0 1.5rem;
   max-width: 32rem;
 }
-.contact-card h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.contact-card > details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.contact-card-content { margin-top: 0.75rem; }
 .contact-details { list-style: none; margin: 0 0 0.5rem; padding: 0; }
 .contact-details li { padding: 0.15rem 0; }
 .contact-card .saved-note { color: #1c6b3a; margin: 0 0 0.5rem; font-size: 0.9rem; }
@@ -146,6 +190,29 @@ button { padding: 0.5rem 1rem; }
 .contact-form label { display: block; margin: 0.4rem 0; font-size: 0.9rem; }
 .contact-form input { width: 100%; max-width: 22rem; padding: 0.3rem; display: block; margin-top: 0.15rem; }
 .contact-form button { margin-top: 0.5rem; }
+
+/* Editable citation suggestions on the article detail page. */
+.citation-examples {
+  margin: 1.5rem 0;
+  max-width: 42rem;
+}
+.citation-examples h2 { margin-bottom: 0.5rem; }
+.citation-examples textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid #ccd6e0;
+  border-radius: 4px;
+  font: inherit;
+  resize: vertical;
+}
+.citation-examples button { margin-top: 0.5rem; }
+.citation-examples .saved-note {
+  color: #1c6b3a;
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
 
 /* Author affiliations */
 .affiliations {
@@ -185,23 +252,28 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
 .status-metadata_failed { background: #fde8e8; color: #9b2020; border-color: #f2c2c2; }
 .legend { color: #666; font-size: 0.85rem; margin-top: 0.6rem; }
 
-.cite-first-cell form { margin: 0; }
+/* A plain "!" rather than the ❗ emoji: emoji are drawn from a colour font, so
+   `color` has no effect on them and the glyph stays red whatever we do. */
 .cite-first-btn {
-  border: 1px solid #ccd6e0;
+  border: 1px solid #bfe3cc;
   border-radius: 4px;
-  background: #f7f9fb;
-  color: #b8bfc7;
+  background: #f4faf6;
+  color: #2f8f52;
   cursor: pointer;
   font-size: 0.95rem;
+  font-weight: 700;
   line-height: 1;
-  padding: 0.2rem 0.45rem;
+  padding: 0.2rem 0.5rem;
 }
-.cite-first-btn:hover { background: #eef2f7; }
+.cite-first-btn:hover { background: #e7f5ec; border-color: #9ad2a8; }
 .cite-first-btn.cite-first-active {
-  background: #fff6e0;
-  border-color: #f0dca0;
-  color: #8a6100;
+  background: #1c6b3a;
+  border-color: #1c6b3a;
+  color: #fff;
 }
+/* Whole row picks up the same green so a marked paper is findable at a glance. */
+.cite-first-row > td { background: #e7f5ec; }
+.cite-first-row:hover > td { background: #dcefe3; }
 
 .row-actions { white-space: nowrap; }
 .btn {
@@ -265,3 +337,45 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
 .date-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .subtle { color: #6b7785; }
 td.subtle, .date-cell.subtle { font-size: 0.9em; }
+
+/* --- collapsible table sections --------------------------------------------- */
+.table-section { margin: 1.2rem 0; }
+.table-section > details > summary,
+.table-section .export-bar {
+  box-sizing: border-box;
+  width: 150%;
+  max-width: 150%;
+  margin-left: -25%;
+  margin-right: -25%;
+}
+.table-section > details > summary {
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+  background: #f7f9fb;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.table-section > details[open] > summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.table-section > details > summary:hover { background: #eef2f7; }
+/* The "requested citing" section reads as the green call-to-action it is. */
+.cite-first-section > details > summary {
+  background: #e7f5ec;
+  border-color: #bfe3cc;
+  color: #1c6b3a;
+}
+.cite-first-section > details > summary:hover { background: #dcefe3; }
+
+@media (max-width: 75rem) {
+  .table-section > details > summary,
+  .table-section .export-bar {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+}

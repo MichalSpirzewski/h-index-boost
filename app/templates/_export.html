@@ -5,8 +5,13 @@
     buttons are plain submits with `formaction`, so downloading works without JS;
     export.js only adds the counter, select-all and clipboard copy. -#}
 
+{#- The action matters even though both download buttons carry `formaction`: with
+    nothing ticked they are disabled, so an implicit submit (Enter inside the form)
+    has no submit button to take a formaction from and would fall back to the
+    form's own action. Left empty that is the current page, which only serves GET
+    -- an instant 405. Pointing it at a real endpoint makes the fallback work. -#}
 {% macro export_form_open() %}
-<form method="post" class="js-export-form">
+<form method="post" action="/export/bibtex" class="js-export-form">
 {% endmacro %}
 
 {% macro export_form_close() %}

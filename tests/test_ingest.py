@@ -31,6 +31,29 @@ def test_ingest_doi_runs_full_pipeline(client) -> None:
     assert [t.name for t in article.topics] == ["Physics and Astronomy"]
 
 
+def test_journal_ampersand_is_normalized_to_and(
+    client, monkeypatch, crossref_message
+) -> None:
+    import copy
+
+    from app import ingest
+
+    message = copy.deepcopy(crossref_message)
+    message["DOI"] = "10.9999/reliability"
+    message["container-title"] = ["Reliability Engineering &amp; System Safety"]
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi: message)
+
+    body = client.post("/api/ingest", data={"doi": message["DOI"]}).json()
+    article = _get_article(body["article_id"])
+
+    assert article.journal == "Reliability Engineering and System Safety"
+    page = client.get("/").text
+    assert (
+        'href="/journals/Reliability%20Engineering%20and%20System%20Safety"'
+        in page
+    )
+
+
 def test_hardcoded_name_alias_groups_nowak(client) -> None:
     """'Mateusz Marek Nowak' and 'Mateusz Nowak' must resolve to one canonical author."""
     from app import db, ingest
@@ -169,3 +192,96 @@ def test_crossref_failure_marks_metadata_failed(client, monkeypatch) -> None:
     body = client.post("/api/ingest", data={"doi": "10.9999/gone"}).json()
     article = _get_article(body["article_id"])
     assert article.status == "metadata_failed"
+
+
+def test_current_ingest_cannot_create_duplicate_authors(client) -> None:
+    """The same person credited with and without an ORCID must resolve to one row."""
+    from app import db, ingest
+    from app.models import Author
+
+    with db.SessionLocal() as session:
+        a = ingest._get_or_create_author(session, "Michał Spirzewski", "0000-0002-4540-8494")
+        session.commit()
+        b = ingest._get_or_create_author(session, "Michał Spirzewski", None)
+        c = ingest._get_or_create_author(session, "Michał Spirzewski", "0000-0009-9999-9999")
+        session.commit()
+        assert a.id == b.id == c.id
+        assert len(session.scalars(select(Author)).all()) == 1
+
+
+def test_name_key_folds_diacritics_case_and_spacing() -> None:
+    from app.ingest import author_name_key
+
+    assert author_name_key("Sławomir Potempski") == author_name_key("Slawomir Potempski")
+    assert author_name_key("Michał Spirzewski") == author_name_key("michal  spirzewski ")
+    assert author_name_key("Mariusz Dąbrowski") == author_name_key("Mariusz Dabrowski")
+    # Different people stay different.
+    assert author_name_key("Piotr Darnowski") != author_name_key("Piotr Domitr")
+
+
+def test_merge_duplicate_authors_folds_legacy_rows(client) -> None:
+    """Legacy state: one row carries the ORCID, its twin does not."""
+    from app import db, ingest
+    from app.models import Article, ArticleAuthor, Author
+
+    with db.SessionLocal() as session:
+        with_orcid = Author(full_name="Michał Spirzewski", orcid="0000-0002-4540-8494")
+        without = Author(full_name="Michał Spirzewski")
+        session.add_all([with_orcid, without])
+        session.flush()
+        for author, doi in ((with_orcid, "10.1/a"), (without, "10.1/b")):
+            article = Article(doi=doi, status="ready")
+            session.add(article)
+            session.flush()
+            session.add(
+                ArticleAuthor(article_id=article.id, author_id=author.id, position=0)
+            )
+        session.commit()
+        keep_id, gone_id = with_orcid.id, without.id
+
+    with db.SessionLocal() as session:
+        assert ingest.merge_duplicate_authors(session) == 1
+
+    with db.SessionLocal() as session:
+        assert session.get(Author, gone_id).merged_into_id == keep_id
+        assert session.get(Author, keep_id).merged_into_id is None  # ORCID row survives
+        links = session.scalars(
+            select(ArticleAuthor.article_id).where(ArticleAuthor.author_id == keep_id)
+        ).all()
+        assert len(links) == 2  # both papers credited to the one author
+
+    with db.SessionLocal() as session:
+        assert ingest.merge_duplicate_authors(session) == 0  # idempotent
+
+
+def test_merge_keeps_the_spelling_with_diacritics(client) -> None:
+    from app import db, ingest
+    from app.models import Author
+
+    with db.SessionLocal() as session:
+        session.add_all(
+            [Author(full_name="Slawomir Potempski"), Author(full_name="Sławomir Potempski")]
+        )
+        session.commit()
+
+    with db.SessionLocal() as session:
+        assert ingest.merge_duplicate_authors(session) == 1
+    with db.SessionLocal() as session:
+        survivor = session.scalar(
+            select(Author).where(Author.merged_into_id.is_(None), Author.full_name.like("%otempski"))
+        )
+        assert survivor.full_name == "Sławomir Potempski"
+
+
+def test_merge_never_joins_different_people(client) -> None:
+    from app import db, ingest
+    from app.models import Author
+
+    with db.SessionLocal() as session:
+        session.add_all(
+            [Author(full_name="Piotr Darnowski"), Author(full_name="Piotr Domitr")]
+        )
+        session.commit()
+
+    with db.SessionLocal() as session:
+        assert ingest.merge_duplicate_authors(session) == 0

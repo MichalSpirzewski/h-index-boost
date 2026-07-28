@@ -22,21 +22,25 @@
 {% if is_ncbj %}
 {% set has_contact = contact.phone or contact.meeting_link %}
 <section class="contact-card">
-  <h2>NCBJ contact</h2>
-  {% if contact_saved %}<p class="saved-note">✓ Contact saved.</p>{% endif %}
-  {% if has_contact %}
-  <ul class="contact-details">
-    {% if contact.phone %}<li>☎ <a href="tel:{{ contact.phone }}">{{ contact.phone }}</a></li>{% endif %}
-    {% if contact.meeting_link %}<li>🎥 <a href="{{ contact.meeting_link }}" target="_blank" rel="noopener">Join meeting</a></li>{% endif %}
-  </ul>
-  {% endif %}
-  <details class="contact-editor"{% if not has_contact %} open{% endif %}>
-    <summary>{{ "Edit contact details" if has_contact else "Add contact details" }}</summary>
-    <form method="post" action="/authors/{{ author.id }}/contact" class="contact-form">
-      <label>Phone <input type="text" name="phone" value="{{ contact.phone or '' }}" placeholder="+48 …"></label>
-      <label>Meeting link <input type="url" name="meeting_link" value="{{ contact.meeting_link or '' }}" placeholder="https://…"></label>
-      <button type="submit">Save contact</button>
-    </form>
+  <details>
+    <summary><span class="panel-title">NCBJ contact</span></summary>
+    <div class="contact-card-content">
+      {% if contact_saved %}<p class="saved-note">✓ Contact saved.</p>{% endif %}
+      {% if has_contact %}
+      <ul class="contact-details">
+        {% if contact.phone %}<li>☎ <a href="tel:{{ contact.phone }}">{{ contact.phone }}</a></li>{% endif %}
+        {% if contact.meeting_link %}<li>🎥 <a href="{{ contact.meeting_link }}" target="_blank" rel="noopener">Join meeting</a></li>{% endif %}
+      </ul>
+      {% endif %}
+      <details class="contact-editor"{% if not has_contact %} open{% endif %}>
+        <summary>{{ "Edit contact details" if has_contact else "Add contact details" }}</summary>
+        <form method="post" action="/authors/{{ author.id }}/contact" class="contact-form">
+          <label>Phone <input type="text" name="phone" value="{{ contact.phone or '' }}" placeholder="+48 …"></label>
+          <label>Meeting link <input type="url" name="meeting_link" value="{{ contact.meeting_link or '' }}" placeholder="https://…"></label>
+          <button type="submit">Save contact</button>
+        </form>
+      </details>
+    </div>
   </details>
 </section>
 {% endif %}
@@ -54,12 +58,14 @@
   <thead><tr>{{ export.select_th() }}{{ sort_th("title", "Title") }}{{ sort_th("year", "Published") }}{{ sort_th("online", "Online") }}{{ sort_th("journal", "Journal") }}</tr></thead>
   <tbody>
     {% for article in articles %}
-    <tr>
+    {#- Same green as the dashboard, but no separate section and no toggle button:
+        this is a read-only cue that the paper is one the group asked to be cited. -#}
+    <tr{% if article.cite_first %} class="cite-first-row" title="Requested citing"{% endif %}>
       {{ export.select_td(article) }}
       <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
       <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
       <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
-      <td>{{ article.journal or "" }}</td>
+      <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "_export.html" as export %}
+{#- Kept intentionally parallel to the author publications page so this can
+    evolve independently when journals gain more metadata later. -#}
+{% macro sort_th(key, label) %}
+  {%- set active = (sort == key) -%}
+  {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
+  <th class="sortable{% if active %} active{% endif %}">
+    <a href="/journals/{{ journal | urlencode }}?sort={{ key }}&order={{ next_order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
+      {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
+    </a>
+  </th>
+{% endmacro %}
+{% block content %}
+<h1>{{ journal }}</h1>
+
+{% if active_topic %}
+<h2>Publications tagged “{{ active_topic.name }}” ({{ articles | length }})</h2>
+<p class="sort"><a href="/journals/{{ journal | urlencode }}">← All publications</a> · click a column header to sort.</p>
+{% else %}
+<h2>Publications ({{ articles | length }})</h2>
+{% endif %}
+
+{% if articles %}
+{{ export.export_form_open() }}
+{{ export.export_bar() }}
+<table class="wide-table">
+  <thead>
+    <tr>
+      {{ export.select_th() }}
+      {{ sort_th("title", "Title") }}
+      {{ sort_th("author", "Authors") }}
+      {{ sort_th("year", "Published") }}
+      {{ sort_th("online", "Online") }}
+    </tr>
+  </thead>
+  <tbody>
+    {% for article in articles %}
+    <tr{% if article.cite_first %} class="cite-first-row" title="Requested citing"{% endif %}>
+      {{ export.select_td(article) }}
+      <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td>
+        {%- for author in article.authors[:3] -%}
+          <a href="/authors/{{ author.id }}" title="{{ author.full_name }}">{{ author.full_name | short_name }}</a>{% if not loop.last %}, {% endif %}
+        {%- endfor -%}
+        {%- if article.authors | length > 3 %} et al.{% endif -%}
+      </td>
+      <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
+      <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{{ export.export_form_close() }}
+{% else %}
+<p>No articles found for this journal.</p>
+{% endif %}
+
+{% if topic_stats %}
+<h2>Topics <span class="count-badge">{{ topic_stats | length }}</span></h2>
+<div class="chips">
+  {% for topic, count in topic_stats %}
+  {%- set is_active = active_topic and active_topic.id == topic.id -%}
+  <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
+     href="{% if is_active %}/journals/{{ journal | urlencode }}{% else %}/journals/{{ journal | urlencode }}?topic={{ topic.id }}{% endif %}"
+     title="{% if is_active %}Clear filter{% else %}{{ count }} publication{{ '' if count == 1 else 's' }} in this journal tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

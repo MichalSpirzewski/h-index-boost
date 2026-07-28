@@ -54,26 +54,44 @@
   </details>
 </section>
 {% endif %}
+{#- Counts live on the section headers below, so the page title carries none. -#}
 {% if active_topic %}
-<h1>Papers tagged “{{ active_topic.name }}” <span class="count-badge">{{ articles | length }}</span></h1>
+<h1>Papers tagged “{{ active_topic.name }}”</h1>
 <p class="sort"><a href="/">← All papers</a> · click a column header to sort.</p>
 {% else %}
 {%- set is_default = (sort == "year" and order == "desc") -%}
 <h1>
   {%- if is_default %}Latest publications
   {%- elif sort == "recent" %}Recently added
-  {%- else %}All articles{% endif %}
-  <span class="count-badge">{{ article_total }}</span>
+  {%- else %}All articles{% endif -%}
 </h1>
 <p class="sort">
   {%- if is_default %}Newest published first. Click a column header to sort.
   {%- else %}Click a column header to sort. <a href="/">Reset to newest published</a>.{% endif -%}
 </p>
 {% endif %}
-{% if articles %}
+{#- One table body, rendered once per section. Each gets its own export form so
+    "Select all" and the counter apply to that table only. -#}
+{% macro article_table(rows) %}
 {{ export.export_form_open() }}
+{#- Carried by whichever button submits this form, so the cite-first toggle can
+    send the reader back to the view they were looking at. -#}
+<input type="hidden" name="sort" value="{{ sort }}">
+<input type="hidden" name="order" value="{{ order }}">
+{% if active_topic %}<input type="hidden" name="topic" value="{{ active_topic.id }}">{% endif %}
 {{ export.export_bar() }}
 <table class="wide-table">
+  <colgroup>
+    <col class="article-col-select">
+    <col class="article-col-title">
+    <col class="article-col-authors">
+    <col class="article-col-published">
+    <col class="article-col-online">
+    <col class="article-col-journal">
+    <col class="article-col-status">
+    <col class="article-col-cite">
+    <col class="article-col-pdf">
+  </colgroup>
   <thead>
     <tr>
       {{ export.select_th() }}
@@ -88,10 +106,10 @@
     </tr>
   </thead>
   <tbody>
-    {% for article in articles %}
-    <tr>
+    {% for article in rows %}
+    <tr{% if article.cite_first %} class="cite-first-row"{% endif %}>
       {{ export.select_td(article) }}
-      <td>
+      <td class="article-title-cell">
         <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
         {% if article.topics %}
         <div class="chips">
@@ -109,7 +127,7 @@
       </td>
       <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
       <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
-      <td>{{ article.journal or "" }}</td>
+      <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
       <td>
         {%- set status_help = {
           "ready": "Metadata fetched and the article is fully processed.",
@@ -119,13 +137,14 @@
         <span class="status status-{{ article.status }}" title="{{ status_help.get(article.status, article.status) }}">{{ article.status }}</span>
       </td>
       <td class="cite-first-cell">
-        <form method="post" action="/articles/{{ article.id }}/cite-first">
-          <input type="hidden" name="sort" value="{{ sort }}">
-          <input type="hidden" name="order" value="{{ order }}">
-          {% if active_topic %}<input type="hidden" name="topic" value="{{ active_topic.id }}">{% endif %}
-          <button type="submit" class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
-                  title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">❗</button>
-        </form>
+        {#- No nested <form> here: this row sits inside the export form, and nesting
+            forms is invalid HTML — the browser drops the inner one and the button
+            ends up submitting the export form instead. `formaction` retargets this
+            one submit without a second form. -#}
+        <button type="submit" formaction="/articles/{{ article.id }}/cite-first"
+                class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
+                aria-pressed="{{ 'true' if article.cite_first else 'false' }}"
+                title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">!</button>
       </td>
       <td class="row-actions">
         {% if article.pdf_path %}
@@ -138,6 +157,29 @@
   </tbody>
 </table>
 {{ export.export_form_close() }}
+{% endmacro %}
+
+{% if articles %}
+{% if cited_articles %}
+<section class="table-section cite-first-section">
+  <details open>
+    <summary>
+      <span class="panel-title">Research requested citing</span>
+      <span class="count-badge">{{ cited_articles | length }}</span>
+    </summary>
+    {{ article_table(cited_articles) }}
+  </details>
+</section>
+{% endif %}
+<section class="table-section">
+  <details open>
+    <summary>
+      <span class="panel-title">All research</span>
+      <span class="count-badge">{{ articles | length }}</span>
+    </summary>
+    {{ article_table(articles) }}
+  </details>
+</section>
 <p class="legend">
   <strong>Status:</strong>
   <span class="status status-ready">ready</span> fully processed ·

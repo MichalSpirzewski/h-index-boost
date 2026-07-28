@@ -151,6 +151,35 @@ def test_author_page_404_for_unknown_author(client) -> None:
     assert resp.status_code == 404
 
 
+def test_journal_links_open_page_with_only_that_journals_publications(
+    client, monkeypatch, crossref_message
+) -> None:
+    from app import ingest
+
+    for doi, title, journal in (
+        ("10.9999/journal-a", "Journal Paper A", "Journal of Tests"),
+        ("10.9999/journal-b", "Journal Paper B", "Other Review"),
+    ):
+        message = copy.deepcopy(crossref_message)
+        message["DOI"] = doi
+        message["title"] = [title]
+        message["container-title"] = [journal]
+        monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi, m=message: m)
+        client.post("/api/ingest", data={"doi": doi})
+
+    dashboard = client.get("/").text
+    assert 'href="/journals/Journal%20of%20Tests"' in dashboard
+
+    page = client.get("/journals/Journal%20of%20Tests").text
+    assert "<h1>Journal of Tests</h1>" in page
+    assert "Journal Paper A" in page
+    assert "Journal Paper B" not in page
+
+
+def test_journal_page_404_for_unknown_journal(client) -> None:
+    assert client.get("/journals/Unknown%20Journal").status_code == 404
+
+
 def test_dashboard_shows_pdf_actions_only_when_pdf_attached(client, monkeypatch) -> None:
     from app import ingest
 
@@ -233,6 +262,36 @@ def test_article_page_offers_a_word_download(client) -> None:
     assert "<b:Tag>smith2009measured</b:Tag>" in resp.text
 
 
+def test_article_page_can_save_citation_examples(client) -> None:
+    article_id = client.post(
+        "/api/ingest", data={"doi": "10.9999/citation-examples"}
+    ).json()["article_id"]
+
+    page = client.get(f"/articles/{article_id}").text
+    assert (
+        'placeholder="Dodaj tutaj 3-4 przykłady jak ten artykuł mógłby być '
+        'cytowany w innych pracach"'
+    ) in page
+
+    example = "Metoda została zastosowana do analizy bezpieczeństwa reaktora."
+    response = client.post(
+        f"/articles/{article_id}/citation-examples",
+        data={"citation_examples": example},
+    )
+
+    assert response.status_code == 200
+    assert "Zapisano przykłady cytowania." in response.text
+    assert example in client.get(f"/articles/{article_id}").text
+
+
+def test_saving_citation_examples_for_unknown_article_returns_404(client) -> None:
+    response = client.post(
+        "/articles/999/citation-examples",
+        data={"citation_examples": "Example"},
+    )
+    assert response.status_code == 404
+
+
 def test_word_xml_404_for_unknown_article(client) -> None:
     assert client.get("/articles/999/word-xml").status_code == 404
 
@@ -253,8 +312,11 @@ def _two_articles(client, monkeypatch, crossref_message):
 def test_dashboard_panels_are_collapsed_by_default(client, monkeypatch, crossref_message) -> None:
     _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/panels", ["Adams"])
     page = client.get("/").text
+    # The Authors / Keywords panels fold; the table sections below them do not.
     # <details> with no `open` attribute renders folded.
-    assert "<details open>" not in page
+    for panel in ("Authors", "Keywords &amp; topics"):
+        summary = page.index(f'<span class="panel-title">{panel}</span>')
+        assert page.rindex("<details", 0, summary) == page.rindex("<details>", 0, summary)
 
 
 def test_topic_panel_opens_when_a_topic_filter_is_active(
@@ -445,3 +507,173 @@ def test_online_column_is_sortable_separately(client, monkeypatch, crossref_mess
     assert by_issue.index("Paper 2026-12") < by_issue.index("Paper 2026-4")
     by_online = client.get("/?sort=online").text
     assert by_online.index("Paper 2026-4") < by_online.index("Paper 2026-12")
+
+
+def test_export_form_never_posts_back_to_the_page_itself(
+    client, monkeypatch, crossref_message
+) -> None:
+    """Regression: the form had no action, so an implicit submit with the buttons
+    disabled posted to '/' — which serves GET only — and returned a raw 405."""
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/405", ["Adams"])
+
+    for url in ("/", "/authors/1"):
+        page = client.get(url).text
+        assert 'action="/export/bibtex"' in page
+        # The page itself must reject POST; the form must not be aimed at it.
+        assert client.post(url).status_code == 405
+
+
+def test_browser_posting_an_empty_selection_is_sent_back_not_shown_json(client) -> None:
+    resp = client.post(
+        "/export/bibtex",
+        data={},
+        headers={"accept": "text/html", "referer": "http://testserver/authors/1"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "http://testserver/authors/1"
+
+    # Same request without a referer still lands somewhere sensible.
+    resp = client.post(
+        "/export/word-xml", data={}, headers={"accept": "text/html"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+
+
+def test_cite_first_button_is_not_a_nested_form(client, monkeypatch, crossref_message) -> None:
+    """Regression: the toggle used its own <form> inside the export form. Nested
+    forms are invalid HTML, so browsers dropped the inner one and the ❗ button
+    submitted the export form instead — the reported 405."""
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/nested", ["Adams"])
+    page = client.get("/").text
+
+    table = page[page.index("js-export-form"):page.index("</table>")]
+    assert "<form" not in table, "no second <form> may open inside the export form"
+    assert 'formaction="/articles/1/cite-first"' in table
+
+
+def test_cite_first_marks_the_whole_row(client, monkeypatch, crossref_message) -> None:
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/rowmark", ["Adams"])
+    assert 'class="cite-first-row"' not in client.get("/").text
+
+    marked = client.post("/articles/1/cite-first", data={"sort": "year", "order": "desc"})
+    assert 'class="cite-first-row"' in marked.text
+    assert "cite-first-active" in marked.text
+
+    unmarked = client.post("/articles/1/cite-first", data={"sort": "year", "order": "desc"})
+    assert 'class="cite-first-row"' not in unmarked.text
+
+
+def test_cite_first_glyph_is_not_the_red_emoji(client, monkeypatch, crossref_message) -> None:
+    """❗ comes from a colour-emoji font and ignores CSS `color`, so it cannot be
+    made green; the button has to use a plain text exclamation mark."""
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/glyph", ["Adams"])
+    assert "❗" not in client.get("/").text
+
+
+def test_cite_first_papers_are_pinned_to_the_top(client, monkeypatch, crossref_message) -> None:
+    for i, year in enumerate((2026, 2020, 2015)):
+        _ingest_with_dates(client, monkeypatch, crossref_message, f"10.9999/pin{i}", [year, 1])
+
+    page = client.get("/").text
+    assert page.index("Paper 2026-1") < page.index("Paper 2015-1")  # normal order
+
+    # Flag the oldest paper; it must jump above the newest.
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import Article
+
+    with db.SessionLocal() as session:
+        oldest_id = session.scalar(select(Article.id).where(Article.year == 2015))
+    client.post(f"/articles/{oldest_id}/cite-first", data={"sort": "year", "order": "desc"})
+
+    page = client.get("/").text
+    assert page.index("Paper 2015-1") < page.index("Paper 2026-1")
+
+
+def test_pin_survives_every_sort_column(client, monkeypatch, crossref_message) -> None:
+    for i, year in enumerate((2026, 2015)):
+        _ingest_with_dates(client, monkeypatch, crossref_message, f"10.9999/ps{i}", [year, 1])
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import Article
+
+    with db.SessionLocal() as session:
+        oldest_id = session.scalar(select(Article.id).where(Article.year == 2015))
+    client.post(f"/articles/{oldest_id}/cite-first", data={"sort": "year", "order": "desc"})
+
+    # Including "author", which is sorted in Python after the SQL ORDER BY.
+    for query in ("", "?sort=title", "?sort=year&order=asc", "?sort=author", "?sort=journal"):
+        page = client.get(f"/{query}").text
+        assert page.index("Paper 2015-1") < page.index("Paper 2026-1"), f"pin lost for {query!r}"
+
+
+def test_two_foldable_tables_with_counts(client, monkeypatch, crossref_message) -> None:
+    for i, year in enumerate((2026, 2020, 2015)):
+        _ingest_with_dates(client, monkeypatch, crossref_message, f"10.9999/two{i}", [year, 1])
+
+    # Nothing flagged yet: only the "All research" section exists.
+    page = client.get("/").text
+    assert "Research requested citing" not in page
+    assert "All research" in page
+
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import Article
+
+    with db.SessionLocal() as session:
+        flagged_id = session.scalar(select(Article.id).where(Article.year == 2015))
+    page = client.post(
+        f"/articles/{flagged_id}/cite-first", data={"sort": "year", "order": "desc"}
+    ).text
+
+    assert "Research requested citing" in page
+    assert page.index("Research requested citing") < page.index("All research")
+    # Counts: one flagged, three overall.
+    cited_head = page[page.index("Research requested citing"):page.index("All research")]
+    assert '<span class="count-badge">1</span>' in cited_head
+    all_head = page[page.index("All research"):]
+    assert '<span class="count-badge">3</span>' in all_head
+    # Both sections are <details>, so both fold.
+    assert page.count("<details open>") == 2
+
+
+def test_each_table_gets_its_own_export_form(client, monkeypatch, crossref_message) -> None:
+    """Select-all and the counter must apply per table, not across both."""
+    _ingest_with_dates(client, monkeypatch, crossref_message, "10.9999/forms", [2020, 1])
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import Article
+
+    with db.SessionLocal() as session:
+        flagged_id = session.scalar(select(Article.id))
+    page = client.post(
+        f"/articles/{flagged_id}/cite-first", data={"sort": "year", "order": "desc"}
+    ).text
+
+    assert page.count('class="js-export-form"') == 2
+    # The flagged paper is listed in both tables, so it has two checkboxes.
+    assert page.count(f'name="ids" value="{flagged_id}"') == 2
+
+
+def test_author_page_highlights_cite_first_rows_without_a_second_table(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/ah1", ["Adams"])
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/ah2", ["Adams"])
+
+    page = client.get("/authors/1").text
+    assert "cite-first-row" not in page
+    assert page.count("<table") == 1
+
+    client.post("/articles/1/cite-first", data={"sort": "year", "order": "desc"})
+
+    page = client.get("/authors/1").text
+    assert page.count('class="cite-first-row"') == 1  # only the flagged one
+    assert page.count("<table") == 1  # still a single table
+    assert "Research requested citing" not in page  # no extra section here

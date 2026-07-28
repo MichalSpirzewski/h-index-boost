@@ -8,7 +8,9 @@ import html
 import json
 import os
 import re
+import unicodedata
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -228,9 +230,14 @@ def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
 # which would also match the "Academic Editor:" line in MDPI front matter and
 # start the block on the journal masthead instead of the real affiliation.
 _AFF_KEYWORD_RE = re.compile(
-    r"\b(Universi|Univerz|Institut|Instytut|Centre|Center|Centrum|Department"
+    r"\b(Universi|Univerz|Institut|Instytut|Centrum|Department"
     r"|Laborator|Faculty|Fakult|School|College|Academy|Academia|Akadem"
-    r"|Politech|Politecnico|Ministr|Hospital|Wydział|Division|GmbH|Research)",
+    r"|Politech|Politecnico|Ministr|Hospital|Wydział|Division|GmbH|Research"
+    # "Cent(re|er)" is closed with a boundary rather than left open like the stems
+    # above: as a stem it also fires inside "reliability-centered", which is title
+    # wording, not an institution. A hyphen counts as a word boundary, so the
+    # leading \b alone does not save us here.
+    r"|Cent(?:re|er)s?\b)",
     re.IGNORECASE,
 )
 # An affiliation line prefixed by a superscript marker, e.g. "a National Centre…"
@@ -416,6 +423,26 @@ def _strip_jats(abstract: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", abstract)).strip()
 
 
+def normalize_journal_name(name: str) -> str:
+    """Make HTML-encoded ampersands readable and stable in journal URLs."""
+    decoded = html.unescape(name)
+    return re.sub(r"\s*&\s*", " and ", decoded).strip()
+
+
+def backfill_journal_names(session: Session) -> None:
+    """Apply current journal normalization to records already in the library."""
+    changed = False
+    for article in session.scalars(
+        select(Article).where(Article.journal.is_not(None))
+    ):
+        normalized = normalize_journal_name(article.journal or "")
+        if normalized != article.journal:
+            article.journal = normalized
+            changed = True
+    if changed:
+        session.commit()
+
+
 def _normalize_orcid(orcid: str | None) -> str | None:
     if not orcid:
         return None
@@ -507,6 +534,50 @@ def apply_name_aliases(session: Session) -> int:
                 source.full_name = canonical_name
                 target = source
                 continue
+            merge_authors(session, source, target)
+            merged += 1
+    if merged:
+        session.commit()
+    return merged
+
+
+_NAME_TRANSLIT = str.maketrans({"ł": "l", "Ł": "L", "ø": "o", "đ": "d", "ß": "ss"})
+
+
+def author_name_key(full_name: str) -> str:
+    """Normalized identity for a person's name: case, diacritics and spacing folded.
+
+    Not fuzzy matching — no similarity threshold, no initials guessing. It only
+    treats "Sławomir Potempski" and "Slawomir Potempski" as the one person they
+    are, which PDFs and Crossref spell inconsistently even for the same paper.
+    """
+    decomposed = unicodedata.normalize("NFKD", full_name)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(stripped.translate(_NAME_TRANSLIT).lower().split())
+
+
+def merge_duplicate_authors(session: Session) -> int:
+    """Fold author rows that denote the same person into one canonical record.
+
+    Older ingest matched on ORCID alone, so a researcher credited with an ORCID on
+    one paper and without one on another ended up as two rows — byte-identical
+    names, separate publication counts. Current ingest cannot produce these, but
+    the rows it already produced need clearing up. Runs at startup; merges are
+    soft (`merged_into_id`), so nothing is destroyed. Returns the number merged.
+    """
+    groups: dict[str, list[Author]] = defaultdict(list)
+    for author in session.scalars(select(Author).where(Author.merged_into_id.is_(None))):
+        groups[author_name_key(author.full_name)].append(author)
+
+    merged = 0
+    for candidates in groups.values():
+        if len(candidates) < 2:
+            continue
+        # Survivor: the richest record wins — an ORCID first, then the spelling that
+        # kept its diacritics (the accented form is the correct one), then the oldest.
+        candidates.sort(key=lambda a: (a.orcid is None, a.full_name.isascii(), a.id))
+        target, *sources = candidates
+        for source in sources:
             merge_authors(session, source, target)
             merged += 1
     if merged:
@@ -649,7 +720,7 @@ def apply_crossref(session: Session, article: Article, message: dict[str, Any]) 
         article.title = titles[0]
     containers = message.get("container-title") or []
     if containers:
-        article.journal = containers[0]
+        article.journal = normalize_journal_name(containers[0])
     date_parts = (message.get("issued") or {}).get("date-parts") or [[]]
     if date_parts[0] and date_parts[0][0]:
         article.year = int(date_parts[0][0])

@@ -27,6 +27,8 @@ class Article(Base):
     online_date: Mapped[str | None] = mapped_column(String, nullable=True)
     journal: Mapped[str | None] = mapped_column(Text, nullable=True)
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Free-form examples suggested by library users for citing this publication.
+    citation_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
     crossref_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_text: Mapped[str | None] = mapped_column(Text, nullable=True)

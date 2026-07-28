@@ -38,9 +38,15 @@ def _startup() -> None:
     # was added would otherwise stay split forever.
     with db.SessionLocal() as session:
         ingest.apply_name_aliases(session)
+        # Fold author rows left split by the ORCID-only matching used before the
+        # name-match path existed; current ingest cannot create them any more.
+        ingest.merge_duplicate_authors(session)
         # Same idea for the date columns: derive them from Crossref JSON already on
         # disk, so an existing library gains them without re-fetching anything.
         ingest.backfill_dates(session)
+        # Crossref occasionally supplies HTML entities in container titles. Keep
+        # journal links and page identifiers human-readable for old and new rows.
+        ingest.backfill_journal_names(session)
 
 
 def _affiliation_key(text: str) -> str:
@@ -289,8 +295,9 @@ def index(
     query = query.order_by(
         column.desc() if descending else column.asc(), Article.created_at.desc()
     )
-    # Show the whole tagged set when filtering; otherwise the most recent window.
-    articles = list(session.scalars(query if active_topic is not None else query.limit(20)))
+    # Unlimited: the "All research" heading carries a count, so the table has to
+    # actually contain everything it claims. Revisit if the library outgrows it.
+    articles = list(session.scalars(query))
 
     article_total = session.scalar(
         select(func.count(Article.id)).where(Article.hidden.is_(False))
@@ -304,6 +311,10 @@ def index(
             return (0, tokens[-1].lower() if tokens else "")
 
         articles.sort(key=first_author_surname, reverse=descending)
+
+    # The "requested citing" table is the same rows filtered, not a second query,
+    # so both tables always agree on ordering and on what the filters selected.
+    cited_articles = [article for article in articles if article.cite_first]
 
     # Unique authors in the library + their (non-hidden) publication counts.
     pub_count = func.count(ArticleAuthor.article_id)
@@ -344,6 +355,7 @@ def index(
         "index.html",
         {
             "articles": articles,
+            "cited_articles": cited_articles,
             "article_total": article_total,
             "sort": sort,
             "order": order,
@@ -402,9 +414,16 @@ def search_page(request: Request, session: Session = Depends(db.get_db), q: str 
 
 # Same default as the dashboard: a publication list reads by year, not by upload date.
 # Every key breaks ties on date added so equal years keep a stable order.
+def _publication_first_author(article: Article) -> tuple[str, object]:
+    name = article.authors[0].full_name if article.authors else ""
+    surname = name.split()[-1].lower() if name.split() else ""
+    return surname, article.created_at
+
+
 _PUB_SORT_KEYS = {
     "recent": lambda a: (a.created_at,),
     "title": lambda a: ((a.title or "").lower(), a.created_at),
+    "author": _publication_first_author,
     # Zero-padded ISO strings, so plain string ordering is chronological. Undated
     # papers get "" and land first ascending / last descending, like NULL in SQL.
     "year": lambda a: (a.published_date or "", a.created_at),
@@ -507,6 +526,72 @@ def author_detail(
     )
 
 
+@app.get("/journals/{journal_name:path}")
+def journal_detail(
+    request: Request,
+    journal_name: str,
+    session: Session = Depends(db.get_db),
+    sort: str = "year",
+    order: str = "",
+    topic: int | None = None,
+):
+    """List the library's publications from one journal."""
+    articles = list(
+        session.scalars(
+            select(Article)
+            .where(Article.journal == journal_name, Article.hidden.is_(False))
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+                selectinload(Article.topics),
+            )
+            .order_by(Article.created_at.desc())
+        )
+    )
+    if not articles:
+        raise HTTPException(status_code=404, detail="Journal not found")
+
+    topics: dict[int, Topic] = {}
+    topic_counts: dict[int, int] = {}
+    for article in articles:
+        for article_topic in article.topics:
+            topics[article_topic.id] = article_topic
+            topic_counts[article_topic.id] = topic_counts.get(article_topic.id, 0) + 1
+
+    # As on the author page, filtering changes the table but leaves the topic
+    # summary based on all of this journal's publications.
+    active_topic = topics.get(topic) if topic is not None else None
+    if active_topic is not None:
+        articles = [
+            article
+            for article in articles
+            if any(item.id == active_topic.id for item in article.topics)
+        ]
+
+    if sort not in _PUB_SORT_KEYS:
+        sort = "year"
+    if order not in ("asc", "desc"):
+        order = "desc" if sort in ("recent", "year", "online") else "asc"
+    articles = sorted(
+        articles, key=_PUB_SORT_KEYS[sort], reverse=(order == "desc")
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "journal.html",
+        {
+            "journal": journal_name,
+            "articles": articles,
+            "sort": sort,
+            "order": order,
+            "topic_stats": sorted(
+                ((topics[topic_id], topic_counts[topic_id]) for topic_id in topics),
+                key=lambda pair: (-pair[1], pair[0].name),
+            ),
+            "active_topic": active_topic,
+        },
+    )
+
+
 @app.post("/authors/{author_id}/contact")
 def save_author_contact(
     author_id: int,
@@ -537,6 +622,7 @@ def article_detail(
     pdf_attached: int = 0,
     check_dup: int = 0,
     rescanned: int = -1,
+    citations_saved: int = 0,
 ):
     article = session.get(Article, article_id)
     if article is None or article.hidden:
@@ -558,7 +644,24 @@ def article_detail(
             "pdf_attached": pdf_attached,
             "similar": similar,
             "rescanned": rescanned,
+            "citations_saved": bool(citations_saved),
         },
+    )
+
+
+@app.post("/articles/{article_id}/citation-examples")
+def save_article_citation_examples(
+    article_id: int,
+    session: Session = Depends(db.get_db),
+    citation_examples: str | None = Form(None),
+):
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+    article.citation_examples = _clean(citation_examples)
+    session.commit()
+    return RedirectResponse(
+        f"/articles/{article_id}?citations_saved=1", status_code=303
     )
 
 
@@ -588,6 +691,14 @@ def article_word_xml(article_id: int, session: Session = Depends(db.get_db)):
     )
 
 
+def _empty_selection(request: Request) -> RedirectResponse:
+    """Nothing ticked. A browser gets sent back to the page it came from; an API
+    client gets the 400 it can act on."""
+    if _wants_html(request):
+        return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
+    raise HTTPException(status_code=400, detail="No articles selected")
+
+
 def _articles_for_export(session: Session, ids: list[int]) -> list[Article]:
     """Non-hidden articles for the selected ids, kept in the order they were ticked."""
     if not ids:
@@ -608,9 +719,13 @@ def _articles_for_export(session: Session, ids: list[int]) -> list[Article]:
 
 @app.post("/export/bibtex", response_class=PlainTextResponse)
 def export_bibtex(
-    ids: list[int] = Form(default=[]), session: Session = Depends(db.get_db)
+    request: Request,
+    ids: list[int] = Form(default=[]),
+    session: Session = Depends(db.get_db),
 ):
     """Merge the selected articles into one .bib (cite keys deduplicated across it)."""
+    if not ids:
+        return _empty_selection(request)
     articles = _articles_for_export(session, ids)
     return PlainTextResponse(
         bibtex.export_bibtex(articles),
@@ -623,9 +738,13 @@ def export_bibtex(
 
 @app.post("/export/word-xml", response_class=PlainTextResponse)
 def export_word_xml(
-    ids: list[int] = Form(default=[]), session: Session = Depends(db.get_db)
+    request: Request,
+    ids: list[int] = Form(default=[]),
+    session: Session = Depends(db.get_db),
 ):
     """Same selection as the .bib export, as one Word Source Manager document."""
+    if not ids:
+        return _empty_selection(request)
     articles = _articles_for_export(session, ids)
     return PlainTextResponse(
         word_xml.export_word_xml(articles),

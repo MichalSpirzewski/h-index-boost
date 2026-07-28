@@ -96,3 +96,37 @@ def test_academy_of_sciences_still_counts_as_an_affiliation() -> None:
     assert extract_author_affiliations(pdf, ["Jan Kowalski"]) == [
         "Polish Academy of Sciences, Warsaw, Poland"
     ]
+
+
+def test_title_wording_is_not_mistaken_for_an_affiliation() -> None:
+    """Regression: "reliability-centered" fired the Center stem, so the title became
+    affiliation #1. That also emptied the author region above it, which broke the
+    marker mapping and gave every author every affiliation on the paper."""
+    pdf = _make_pdf(
+        "Integrated framework for the reliability-centered design of advanced\n"
+        "nuclear facilities\n"
+        "Karol Kowal a\n"
+        ", Elzbieta Jartych c\n"
+        ", Hirofumi Ohashi d\n"
+        "a National Centre for Nuclear Research (NCBJ), Otwock, Poland\n"
+        "c Lublin University of Technology (LUT), Lublin, Poland\n"
+        "d Japan Atomic Energy Agency (JAEA), Tokyo, Japan\n"
+        "A B S T R A C T\nBody."
+    )
+    affs = extract_author_affiliations(
+        pdf, ["Karol Kowal", "Elzbieta Jartych", "Hirofumi Ohashi"]
+    )
+    assert "National Centre" in affs[0] and "Lublin" not in affs[0]
+    assert affs[1] == "Lublin University of Technology (LUT), Lublin, Poland"
+    assert affs[2] == "Japan Atomic Energy Agency (JAEA), Tokyo, Japan"
+    assert not any("Integrated framework" in a for a in affs)
+
+
+def test_centre_and_center_still_match_as_institutions() -> None:
+    """Narrowing the stem must not cost us real centres."""
+    for line in (
+        "National Centre for Nuclear Research, Otwock, Poland",
+        "Center for Advanced Studies, Warsaw, Poland",
+    ):
+        pdf = _make_pdf(f"A Title\nJan Kowalski\n{line}\nAbstract\nBody.")
+        assert extract_author_affiliations(pdf, ["Jan Kowalski"]) == [line]

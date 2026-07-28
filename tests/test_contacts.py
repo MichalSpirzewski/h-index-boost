@@ -69,6 +69,8 @@ def test_ncbj_author_page_has_contact_form(client, monkeypatch, crossref_message
     page = client.get(f"/authors/{author_id}").text
     assert "NCBJ contact" in page
     assert f'action="/authors/{author_id}/contact"' in page
+    summary = page.index('<span class="panel-title">NCBJ contact</span>')
+    assert page.rindex("<details", 0, summary) == page.rindex("<details>", 0, summary)
 
 
 def test_post_contact_persists_and_renders(client, monkeypatch, crossref_message):
