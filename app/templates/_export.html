@@ -1,0 +1,40 @@
+{#- Shared multi-select export UI, used by the dashboard and the author pages.
+
+    Wrap a table in `export_form_open()` / `export_form_close()`, put `select_th()`
+    in its header row and `select_td(article)` in each body row. The two download
+    buttons are plain submits with `formaction`, so downloading works without JS;
+    export.js only adds the counter, select-all and clipboard copy. -#}
+
+{% macro export_form_open() %}
+<form method="post" class="js-export-form">
+{% endmacro %}
+
+{% macro export_form_close() %}
+</form>
+{% endmacro %}
+
+{% macro export_bar(label="Export selected") %}
+<div class="export-bar">
+  <label class="select-all"><input type="checkbox" class="js-select-all"> Select all</label>
+  <span class="selected-count js-selected-count">none selected</span>
+  <span class="export-actions">
+    <button type="submit" class="btn js-export-btn" formaction="/export/bibtex"
+            title="Merged .bib for LaTeX / BibTeX" disabled>Download .bib</button>
+    <button type="submit" class="btn js-export-btn" formaction="/export/word-xml"
+            title="One XML for Word: References &rarr; Manage Sources &rarr; Browse" disabled>Download for Word</button>
+    <button type="button" class="btn js-export-btn js-copy-bibtex"
+            title="Copy the merged BibTeX to the clipboard" disabled>Copy BibTeX</button>
+  </span>
+</div>
+{% endmacro %}
+
+{% macro select_th() %}
+<th class="select-col"><span class="sr-only">Select</span></th>
+{% endmacro %}
+
+{% macro select_td(article) %}
+<td class="select-col">
+  <input type="checkbox" name="ids" value="{{ article.id }}" class="js-row-check"
+         aria-label="Select {{ article.title or article.doi or 'this article' }}">
+</td>
+{% endmacro %}

@@ -448,6 +448,39 @@ def _apply_name_alias(full_name: str) -> str:
     return _NAME_ALIASES.get(full_name.strip().casefold(), full_name)
 
 
+def backfill_dates(session: Session) -> int:
+    """Fill published_date / online_date from already-stored Crossref JSON.
+
+    Articles ingested before those columns existed only kept the year. The full
+    message is on disk, so this needs no network call. Runs at startup; only
+    touches rows where the field is still empty. Returns the number filled.
+    """
+    stale = session.scalars(
+        select(Article).where(
+            Article.crossref_json.is_not(None),
+            (Article.published_date.is_(None)) | (Article.online_date.is_(None)),
+        )
+    ).all()
+    filled = 0
+    for article in stale:
+        try:
+            message = json.loads(article.crossref_json)
+        except (TypeError, ValueError):
+            continue
+        published, online = crossref_dates(message)
+        changed = False
+        if published and not article.published_date:
+            article.published_date = published
+            changed = True
+        if online and not article.online_date:
+            article.online_date = online
+            changed = True
+        filled += changed
+    if filled:
+        session.commit()
+    return filled
+
+
 def apply_name_aliases(session: Session) -> int:
     """Fold already-stored variant spellings into their canonical author.
 
@@ -564,6 +597,51 @@ def _get_or_create_topic(session: Session, name: str) -> Topic:
     return topic
 
 
+def iso_date_from_parts(date_parts: list | None) -> str | None:
+    """Crossref `date-parts` -> zero-padded ISO string at the given precision.
+
+    [2025, 11, 11] -> "2025-11-11", [2026, 5] -> "2026-05", [2022] -> "2022".
+    Publishers routinely date an issue to a month only, so the missing day is left
+    off rather than padded to a day the paper was never published on.
+    """
+    if not date_parts:
+        return None
+    parts = [int(p) for p in date_parts[:3] if p is not None]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return f"{parts[0]:04d}"
+    if len(parts) == 2:
+        return f"{parts[0]:04d}-{parts[1]:02d}"
+    return f"{parts[0]:04d}-{parts[1]:02d}-{parts[2]:02d}"
+
+
+def _first_date_parts(message: dict[str, Any], *keys: str) -> list | None:
+    """First present `date-parts` among the given Crossref date fields."""
+    for key in keys:
+        parts = (message.get(key) or {}).get("date-parts") or [[]]
+        if parts[0]:
+            return parts[0]
+    return None
+
+
+def crossref_dates(message: dict[str, Any]) -> tuple[str | None, str | None]:
+    """(issue date, first-online date) from one Crossref message.
+
+    `issued` is the citable publication date and the one that belongs in a
+    bibliography. `created` is when the DOI was registered, which tracks the
+    publisher's "Available online" line — earlier than the issue, and a different
+    thing entirely, so it is kept in its own field rather than mixed in.
+    """
+    published = iso_date_from_parts(
+        _first_date_parts(message, "issued", "published", "published-print")
+    )
+    online = iso_date_from_parts(
+        _first_date_parts(message, "published-online", "created")
+    )
+    return published, online
+
+
 def apply_crossref(session: Session, article: Article, message: dict[str, Any]) -> None:
     article.crossref_json = json.dumps(message)
     titles = message.get("title") or []
@@ -575,6 +653,11 @@ def apply_crossref(session: Session, article: Article, message: dict[str, Any]) 
     date_parts = (message.get("issued") or {}).get("date-parts") or [[]]
     if date_parts[0] and date_parts[0][0]:
         article.year = int(date_parts[0][0])
+    published, online = crossref_dates(message)
+    if published:
+        article.published_date = published
+    if online:
+        article.online_date = online
     if message.get("abstract"):
         article.abstract = _strip_jats(message["abstract"])
 

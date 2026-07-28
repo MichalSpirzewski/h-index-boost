@@ -17,6 +17,14 @@ class Article(Base):
     doi: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Issue date at whatever precision the publisher actually gave: "2025-11-11",
+    # "2026-05" or "2022". A journal issue dated "May 2026" has no day, so the
+    # precision is stored rather than padded to a date that does not exist.
+    # Zero-padded, so lexicographic ordering is chronological ordering.
+    published_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    # When the paper first appeared online (Crossref published-online, else created).
+    # Usually a full date, and usually earlier than the issue it ends up in.
+    online_date: Mapped[str | None] = mapped_column(String, nullable=True)
     journal: Mapped[str | None] = mapped_column(Text, nullable=True)
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
     crossref_json: Mapped[str | None] = mapped_column(Text, nullable=True)

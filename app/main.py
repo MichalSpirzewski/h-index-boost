@@ -38,6 +38,9 @@ def _startup() -> None:
     # was added would otherwise stay split forever.
     with db.SessionLocal() as session:
         ingest.apply_name_aliases(session)
+        # Same idea for the date columns: derive them from Crossref JSON already on
+        # disk, so an existing library gains them without re-fetching anything.
+        ingest.backfill_dates(session)
 
 
 def _affiliation_key(text: str) -> str:
@@ -235,12 +238,16 @@ def article_status(article_id: int, session: Session = Depends(db.get_db)):
 
 # --------------------------------------------------------------------------- pages (minimal until M2)
 
-# Clickable-header sort keys. "recent" is the default (date added); "author"
-# needs the author relationship so it's sorted in Python, the rest in SQL.
+# Clickable-header sort keys. "year" is the default (newest publication first, which
+# is how researchers read a bibliography); "recent" is date *added* to the library.
+# "author" needs the author relationship so it's sorted in Python, the rest in SQL.
 _SORT_COLUMNS = {
     "recent": Article.created_at,
     "title": Article.title,
-    "year": Article.year,
+    # Sorts on the ISO issue date, so papers sharing a year order by month/day.
+    # The key stays "year" to keep existing ?sort=year links working.
+    "year": Article.published_date,
+    "online": Article.online_date,
     "journal": Article.journal,
     "status": Article.status,
 }
@@ -251,15 +258,15 @@ _SORT_KEYS = set(_SORT_COLUMNS) | {"author"}
 def index(
     request: Request,
     session: Session = Depends(db.get_db),
-    sort: str = "recent",
+    sort: str = "year",
     order: str = "",
     topic: int | None = None,
 ):
     if sort not in _SORT_KEYS:
-        sort = "recent"
+        sort = "year"
     # Sensible default direction per column: newest-first for date/year, A→Z otherwise.
     if order not in ("asc", "desc"):
-        order = "desc" if sort in ("recent", "year") else "asc"
+        order = "desc" if sort in ("recent", "year", "online") else "asc"
     descending = order == "desc"
 
     active_topic = session.get(Topic, topic) if topic is not None else None
@@ -276,9 +283,13 @@ def index(
         query = query.join(ArticleTopic, ArticleTopic.article_id == Article.id).where(
             ArticleTopic.topic_id == active_topic.id
         )
-    column = _SORT_COLUMNS.get(sort, Article.created_at)
-    query = query.order_by(column.desc() if descending else column.asc())
-    # Show the whole tagged set when filtering; otherwise the recent-additions window.
+    column = _SORT_COLUMNS.get(sort, Article.year)
+    # Papers share a year (or a journal) constantly, so break ties on date added
+    # instead of letting SQLite return them in whatever order it likes.
+    query = query.order_by(
+        column.desc() if descending else column.asc(), Article.created_at.desc()
+    )
+    # Show the whole tagged set when filtering; otherwise the most recent window.
     articles = list(session.scalars(query if active_topic is not None else query.limit(20)))
 
     if sort == "author":
@@ -359,11 +370,16 @@ def search_page(request: Request, session: Session = Depends(db.get_db), q: str 
     )
 
 
+# Same default as the dashboard: a publication list reads by year, not by upload date.
+# Every key breaks ties on date added so equal years keep a stable order.
 _PUB_SORT_KEYS = {
-    "recent": lambda a: a.created_at,
-    "title": lambda a: (a.title or "").lower(),
-    "year": lambda a: a.year or 0,
-    "journal": lambda a: (a.journal or "").lower(),
+    "recent": lambda a: (a.created_at,),
+    "title": lambda a: ((a.title or "").lower(), a.created_at),
+    # Zero-padded ISO strings, so plain string ordering is chronological. Undated
+    # papers get "" and land first ascending / last descending, like NULL in SQL.
+    "year": lambda a: (a.published_date or "", a.created_at),
+    "online": lambda a: (a.online_date or "", a.created_at),
+    "journal": lambda a: ((a.journal or "").lower(), a.created_at),
 }
 
 
@@ -373,7 +389,7 @@ def author_detail(
     author_id: int,
     session: Session = Depends(db.get_db),
     saved: int = 0,
-    sort: str = "recent",
+    sort: str = "year",
     order: str = "",
     topic: int | None = None,
 ):
@@ -431,11 +447,11 @@ def author_detail(
     if active_topic is not None:
         articles = [a for a in articles if any(t.id == active_topic.id for t in a.topics)]
 
-    # Sortable publications table (clickable headers). Default: newest first.
+    # Sortable publications table (clickable headers). Default: newest published first.
     if sort not in _PUB_SORT_KEYS:
-        sort = "recent"
+        sort = "year"
     if order not in ("asc", "desc"):
-        order = "desc" if sort in ("recent", "year") else "asc"
+        order = "desc" if sort in ("recent", "year", "online") else "asc"
     articles = sorted(articles, key=_PUB_SORT_KEYS[sort], reverse=(order == "desc"))
 
     return templates.TemplateResponse(
@@ -538,6 +554,54 @@ def article_word_xml(article_id: int, session: Session = Depends(db.get_db)):
         media_type="application/xml",
         headers={
             "Content-Disposition": f'attachment; filename="{word_xml.xml_filename(article)}"'
+        },
+    )
+
+
+def _articles_for_export(session: Session, ids: list[int]) -> list[Article]:
+    """Non-hidden articles for the selected ids, kept in the order they were ticked."""
+    if not ids:
+        raise HTTPException(status_code=400, detail="No articles selected")
+    found = {
+        article.id: article
+        for article in session.scalars(
+            select(Article)
+            .where(Article.id.in_(ids), Article.hidden.is_(False))
+            .options(selectinload(Article.author_links).selectinload(ArticleAuthor.author))
+        )
+    }
+    articles = [found[i] for i in dict.fromkeys(ids) if i in found]
+    if not articles:
+        raise HTTPException(status_code=404, detail="None of the selected articles exist")
+    return articles
+
+
+@app.post("/export/bibtex", response_class=PlainTextResponse)
+def export_bibtex(
+    ids: list[int] = Form(default=[]), session: Session = Depends(db.get_db)
+):
+    """Merge the selected articles into one .bib (cite keys deduplicated across it)."""
+    articles = _articles_for_export(session, ids)
+    return PlainTextResponse(
+        bibtex.export_bibtex(articles),
+        media_type="application/x-bibtex",
+        headers={
+            "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-refs.bib"'
+        },
+    )
+
+
+@app.post("/export/word-xml", response_class=PlainTextResponse)
+def export_word_xml(
+    ids: list[int] = Form(default=[]), session: Session = Depends(db.get_db)
+):
+    """Same selection as the .bib export, as one Word Source Manager document."""
+    articles = _articles_for_export(session, ids)
+    return PlainTextResponse(
+        word_xml.export_word_xml(articles),
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-refs.xml"'
         },
     )
 

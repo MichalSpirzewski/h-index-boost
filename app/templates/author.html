@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_export.html" as export %}
 {#- Sortable publications header: click to sort ascending, click the active one to flip. -#}
 {% macro sort_th(key, label) %}
   {%- set active = (sort == key) -%}
@@ -47,18 +48,23 @@
 <h2>Publications ({{ articles | length }})</h2>
 {% endif %}
 {% if articles %}
+{{ export.export_form_open() }}
+{{ export.export_bar() }}
 <table class="wide-table">
-  <thead><tr>{{ sort_th("title", "Title") }}{{ sort_th("year", "Year") }}{{ sort_th("journal", "Journal") }}</tr></thead>
+  <thead><tr>{{ export.select_th() }}{{ sort_th("title", "Title") }}{{ sort_th("year", "Published") }}{{ sort_th("online", "Online") }}{{ sort_th("journal", "Journal") }}</tr></thead>
   <tbody>
     {% for article in articles %}
     <tr>
+      {{ export.select_td(article) }}
       <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
-      <td>{{ article.year or "" }}</td>
+      <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
+      <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
       <td>{{ article.journal or "" }}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+{{ export.export_form_close() }}
 {% else %}
 <p>No articles found for this author.</p>
 {% endif %}

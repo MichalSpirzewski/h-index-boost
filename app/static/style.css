@@ -205,3 +205,45 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
 .banner-actions { margin-left: 0.5rem; font-size: 0.9rem; }
 .form-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
 .form-actions .btn { padding: 0.5rem 0.9rem; }
+
+/* --- multi-select export toolbar -------------------------------------------- */
+.export-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #f7f9fb;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+}
+.export-bar .select-all { font-size: 0.9rem; white-space: nowrap; }
+.export-bar .selected-count {
+  color: #666;
+  font-size: 0.85rem;
+  min-width: 7em;          /* keeps the buttons from shifting as the count changes */
+}
+.export-bar .export-actions { margin-left: auto; white-space: nowrap; }
+.export-bar .btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #f2f4f7;
+}
+.select-col { width: 1%; white-space: nowrap; text-align: center; }
+/* Visually hidden but still read by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Dates keep their own column width; partial ones ("2026-05") stay left-aligned
+   with the full ones so the year digits line up down the column. */
+.date-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.subtle { color: #6b7785; }
+td.subtle, .date-cell.subtle { font-size: 0.9em; }

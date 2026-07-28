@@ -200,3 +200,213 @@ def test_article_page_offers_a_word_download(client) -> None:
 
 def test_word_xml_404_for_unknown_article(client) -> None:
     assert client.get("/articles/999/word-xml").status_code == 404
+
+
+def _two_articles(client, monkeypatch, crossref_message):
+    """Ingest two articles with distinct first authors; return their ids in order."""
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import Article
+
+    for doi, family in (("10.9999/first", "Adams"), ("10.9999/second", "Baker")):
+        _ingest_with_authors(client, monkeypatch, crossref_message, doi, [family])
+    with db.SessionLocal() as session:
+        return list(session.scalars(select(Article.id).order_by(Article.id)))
+
+
+def test_dashboard_panels_are_collapsed_by_default(client, monkeypatch, crossref_message) -> None:
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/panels", ["Adams"])
+    page = client.get("/").text
+    # <details> with no `open` attribute renders folded.
+    assert "<details open>" not in page
+
+
+def test_topic_panel_opens_when_a_topic_filter_is_active(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/topicopen", ["Adams"])
+    from app import db
+    from app.models import Topic
+
+    with db.SessionLocal() as session:
+        topic_id = session.query(Topic).first().id
+    assert "<details open>" in client.get(f"/?topic={topic_id}").text
+
+
+def test_dashboard_and_author_page_offer_multi_select_export(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/multi", ["Adams"])
+    for url in ("/", "/authors/1"):
+        page = client.get(url)
+        assert page.status_code == 200
+        assert 'class="js-export-form"' in page.text
+        assert 'formaction="/export/bibtex"' in page.text
+        assert 'formaction="/export/word-xml"' in page.text
+        assert 'name="ids"' in page.text
+
+
+def test_merged_bibtex_export_of_selected_ids(client, monkeypatch, crossref_message) -> None:
+    ids = _two_articles(client, monkeypatch, crossref_message)
+
+    resp = client.post("/export/bibtex", data={"ids": ids})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/x-bibtex")
+    assert f'filename="refbase-{len(ids)}-refs.bib"' in resp.headers["content-disposition"]
+    assert resp.text.count("@article{") == len(ids)
+    assert "adams" in resp.text and "baker" in resp.text
+
+
+def test_merged_word_export_of_selected_ids(client, monkeypatch, crossref_message) -> None:
+    ids = _two_articles(client, monkeypatch, crossref_message)
+
+    resp = client.post("/export/word-xml", data={"ids": ids})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/xml")
+    assert resp.text.count("<b:Source>") == len(ids)
+
+
+def test_export_of_a_subset_only_includes_that_subset(
+    client, monkeypatch, crossref_message
+) -> None:
+    ids = _two_articles(client, monkeypatch, crossref_message)
+
+    resp = client.post("/export/bibtex", data={"ids": [ids[0]]})
+    assert resp.text.count("@article{") == 1
+    assert "baker" not in resp.text
+
+
+def test_export_with_nothing_selected_is_a_clean_400(client) -> None:
+    assert client.post("/export/bibtex", data={}).status_code == 400
+    assert client.post("/export/word-xml", data={}).status_code == 400
+
+
+def test_export_ignores_hidden_and_unknown_ids(client, monkeypatch, crossref_message) -> None:
+    ids = _two_articles(client, monkeypatch, crossref_message)
+    from app import db
+    from app.models import Article
+
+    with db.SessionLocal() as session:
+        session.get(Article, ids[1]).hidden = True
+        session.commit()
+
+    resp = client.post("/export/bibtex", data={"ids": ids + [99999]})
+    assert resp.status_code == 200
+    assert resp.text.count("@article{") == 1  # hidden and unknown ids dropped
+
+
+def _ingest_with_year(client, monkeypatch, base_message, doi, year):
+    """Ingest one article published in `year`."""
+    from app import ingest
+
+    message = copy.deepcopy(base_message)
+    message["DOI"] = doi
+    message["title"] = [f"Paper from {year}"]
+    message["issued"] = {"date-parts": [[year, 1]]}
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi: message)
+    assert client.post("/api/ingest", data={"doi": doi}).json()["status"] == "created"
+
+
+def test_dashboard_defaults_to_newest_published_not_newest_uploaded(
+    client, monkeypatch, crossref_message
+) -> None:
+    # Upload order is deliberately the reverse of publication order.
+    for i, year in enumerate((2019, 2025, 2021)):
+        _ingest_with_year(client, monkeypatch, crossref_message, f"10.9999/y{i}", year)
+
+    page = client.get("/").text
+    positions = [page.index(f"Paper from {y}") for y in (2025, 2021, 2019)]
+    assert positions == sorted(positions), "expected newest publication first"
+    assert "Latest publications" in page
+
+
+def test_dashboard_can_still_sort_by_date_added(client, monkeypatch, crossref_message) -> None:
+    for i, year in enumerate((2019, 2025, 2021)):
+        _ingest_with_year(client, monkeypatch, crossref_message, f"10.9999/added{i}", year)
+
+    page = client.get("/?sort=recent").text
+    assert "Recently added" in page
+    # Last uploaded (2021) comes first, regardless of publication year.
+    positions = [page.index(f"Paper from {y}") for y in (2021, 2025, 2019)]
+    assert positions == sorted(positions)
+
+
+def test_author_page_publications_default_to_newest_published(
+    client, monkeypatch, crossref_message
+) -> None:
+    for i, year in enumerate((2018, 2026, 2020)):
+        message = copy.deepcopy(crossref_message)
+        message["DOI"] = f"10.9999/auth{i}"
+        message["title"] = [f"Paper from {year}"]
+        message["issued"] = {"date-parts": [[year, 1]]}
+        message["author"] = [{"given": "Alex", "family": "Adams", "sequence": "first"}]
+        from app import ingest
+
+        monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi, m=message: m)
+        client.post("/api/ingest", data={"doi": f"10.9999/auth{i}"})
+
+    page = client.get("/authors/1").text
+    positions = [page.index(f"Paper from {y}") for y in (2026, 2020, 2018)]
+    assert positions == sorted(positions)
+
+
+def test_articles_without_a_year_sort_last_not_first(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_with_year(client, monkeypatch, crossref_message, "10.9999/dated", 2020)
+    # A DOI-less stub never gets a year from Crossref.
+    client.post("/api/ingest", data={"title": "Undated Stub Paper"})
+
+    page = client.get("/").text
+    assert page.index("Paper from 2020") < page.index("Undated Stub Paper")
+
+
+def _ingest_with_dates(client, monkeypatch, base_message, doi, issued, created=None):
+    """Ingest one article with an explicit Crossref issue date."""
+    from app import ingest
+
+    message = copy.deepcopy(base_message)
+    message["DOI"] = doi
+    message["title"] = [f"Paper {'-'.join(str(p) for p in issued)}"]
+    message["issued"] = {"date-parts": [issued]}
+    if created:
+        message["created"] = {"date-parts": [created]}
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi: message)
+    client.post("/api/ingest", data={"doi": doi})
+
+
+def test_papers_from_one_year_order_by_month(client, monkeypatch, crossref_message) -> None:
+    """The point of storing more than the year: 2026 papers no longer all tie."""
+    for i, issued in enumerate(([2026, 4], [2026, 12], [2026, 5])):
+        _ingest_with_dates(client, monkeypatch, crossref_message, f"10.9999/m{i}", issued)
+
+    page = client.get("/").text
+    order = [page.index(f"Paper 2026-{m}") for m in (12, 5, 4)]
+    assert order == sorted(order), "expected December before May before April"
+
+
+def test_partial_dates_render_without_an_invented_day(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_with_dates(
+        client, monkeypatch, crossref_message, "10.9999/partial", [2026, 5], [2026, 5, 21]
+    )
+    page = client.get("/").text
+    assert ">2026-05<" in page  # month precision kept as-is
+    assert ">2026-05-01<" not in page  # no fabricated first-of-month
+    assert ">2026-05-21<" in page  # the online date does have a day
+
+
+def test_online_column_is_sortable_separately(client, monkeypatch, crossref_message) -> None:
+    _ingest_with_dates(
+        client, monkeypatch, crossref_message, "10.9999/o1", [2026, 12], [2026, 7, 1]
+    )
+    _ingest_with_dates(
+        client, monkeypatch, crossref_message, "10.9999/o2", [2026, 4], [2026, 11, 3]
+    )
+    # By issue date the December paper leads; by online date the November one does.
+    by_issue = client.get("/").text
+    assert by_issue.index("Paper 2026-12") < by_issue.index("Paper 2026-4")
+    by_online = client.get("/?sort=online").text
+    assert by_online.index("Paper 2026-4") < by_online.index("Paper 2026-12")

@@ -54,6 +54,7 @@
 </p>
 <dl>
   {% if article.journal %}<dt>Journal</dt><dd>{{ article.journal }}{% if article.year %} ({{ article.year }}){% endif %}</dd>{% endif %}
+  {% if article.published_date %}<dt>Published</dt><dd>{{ article.published_date }}{% if article.online_date and article.online_date != article.published_date %} <span class="subtle">(online {{ article.online_date }})</span>{% endif %}</dd>{% endif %}
   {% if article.doi %}<dt>DOI</dt><dd><a href="https://doi.org/{{ article.doi }}">{{ article.doi }}</a></dd>{% endif %}
   {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
   {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}

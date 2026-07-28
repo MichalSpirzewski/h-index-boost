@@ -69,6 +69,10 @@ def init_db() -> None:
         if article_cols and "pdf_text" not in article_cols:
             conn.execute(text("ALTER TABLE articles ADD COLUMN pdf_text TEXT"))
 
+        for column in ("published_date", "online_date"):
+            if article_cols and column not in article_cols:
+                conn.execute(text(f"ALTER TABLE articles ADD COLUMN {column} VARCHAR"))
+
         author_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(authors)"))]
         if author_cols and "merged_into_id" not in author_cols:
             conn.execute(text("ALTER TABLE authors ADD COLUMN merged_into_id INTEGER"))

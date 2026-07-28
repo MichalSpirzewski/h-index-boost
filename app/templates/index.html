@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_export.html" as export %}
 {#- Sortable column header: clicking sorts ascending, clicking the active one flips
     direction. Shows ▲/▼ on the active column. -#}
 {% macro sort_th(key, label) %}
@@ -23,7 +24,7 @@
 {% endmacro %}
 {% if author_total %}
 <section class="authors-panel">
-  <details open>
+  <details>
     <summary><span class="panel-title">Authors</span> <span class="count-badge">{{ author_total }}</span></summary>
     <div class="author-groups">
       {% if ncnr_authors %}
@@ -40,7 +41,7 @@
 {% endif %}
 {% if topic_stats %}
 <section class="authors-panel topics-panel">
-  <details open>
+  <details{% if active_topic %} open{% endif %}>
     <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
     <div class="chips">
       {% for topic, count in topic_stats %}
@@ -57,16 +58,28 @@
 <h1>Papers tagged “{{ active_topic.name }}” <span class="count-badge">{{ articles | length }}</span></h1>
 <p class="sort"><a href="/">← All papers</a> · click a column header to sort.</p>
 {% else %}
-<h1>{% if sort == "recent" %}Recent additions{% else %}All articles{% endif %}</h1>
-<p class="sort">Click a column header to sort.{% if sort != "recent" %} <a href="/">Reset to date added</a>.{% endif %}</p>
+{%- set is_default = (sort == "year" and order == "desc") -%}
+<h1>
+  {%- if is_default %}Latest publications
+  {%- elif sort == "recent" %}Recently added
+  {%- else %}All articles{% endif -%}
+</h1>
+<p class="sort">
+  {%- if is_default %}Newest published first. Click a column header to sort.
+  {%- else %}Click a column header to sort. <a href="/">Reset to newest published</a>.{% endif -%}
+</p>
 {% endif %}
 {% if articles %}
+{{ export.export_form_open() }}
+{{ export.export_bar() }}
 <table class="wide-table">
   <thead>
     <tr>
+      {{ export.select_th() }}
       {{ sort_th("title", "Title") }}
       {{ sort_th("author", "Authors") }}
-      {{ sort_th("year", "Year") }}
+      {{ sort_th("year", "Published") }}
+      {{ sort_th("online", "Online") }}
       {{ sort_th("journal", "Journal") }}
       {{ sort_th("status", "Status") }}
       <th>PDF</th>
@@ -75,6 +88,7 @@
   <tbody>
     {% for article in articles %}
     <tr>
+      {{ export.select_td(article) }}
       <td>
         <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
         {% if article.topics %}
@@ -91,7 +105,8 @@
         {%- endfor -%}
         {%- if authors | length > 3 %} et al.{% endif -%}
       </td>
-      <td>{{ article.year or "" }}</td>
+      <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
+      <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
       <td>{{ article.journal or "" }}</td>
       <td>
         {%- set status_help = {
@@ -111,6 +126,7 @@
     {% endfor %}
   </tbody>
 </table>
+{{ export.export_form_close() }}
 <p class="legend">
   <strong>Status:</strong>
   <span class="status status-ready">ready</span> fully processed ·
