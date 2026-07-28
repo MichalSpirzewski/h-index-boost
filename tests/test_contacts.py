@@ -87,6 +87,26 @@ def test_post_contact_persists_and_renders(client, monkeypatch, crossref_message
     assert "https://meet.example/xyz" in page
 
 
+def test_dashboard_lists_only_saved_meeting_links(
+    client, monkeypatch, crossref_message
+):
+    author_id = _ingest_ncbj_author(client, monkeypatch, crossref_message)
+    contacts.save(
+        author_id,
+        "NCBJ Researcher",
+        {
+            "phone": "+48 22 000 00 00",
+            "meeting_link": "https://meet.example/dashboard",
+        },
+    )
+
+    page = client.get("/").text
+    assert 'class="dashboard-panels"' in page
+    assert '<span class="panel-title">Meetings</span>' in page
+    assert f'href="/authors/{author_id}"' in page
+    assert 'href="https://meet.example/dashboard"' in page
+
+
 def test_non_ncbj_author_has_no_contact_card(client, monkeypatch, crossref_message):
     # The default crossref_sample authors carry no NCBJ affiliation.
     client.post("/api/ingest", data={"doi": "10.5555/other"})

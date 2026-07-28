@@ -16,44 +16,65 @@
 <ul class="author-list">
   {% for author, pubs in pairs %}
   <li>
-    <a href="/authors/{{ author.id }}">{{ author.full_name }}</a>
+    <a href="/authors/{{ author.id }}" title="{{ author.full_name }}">{{ author.full_name | short_name }}</a>
     <span class="pub-count" title="{{ pubs }} publication{{ '' if pubs == 1 else 's' }} in the library">{{ pubs }}</span>
   </li>
   {% endfor %}
 </ul>
 {% endmacro %}
-{% if author_total %}
-<section class="authors-panel">
-  <details>
-    <summary><span class="panel-title">Authors</span> <span class="count-badge">{{ author_total }}</span></summary>
-    <div class="author-groups">
-      {% if ncnr_authors %}
-      <h3 class="author-group-title">{{ ncnr_label }} <span class="count-badge subtle">{{ ncnr_authors | length }}</span></h3>
-      {{ author_group(ncnr_authors) }}
+<div class="dashboard-panels">
+  <div class="dashboard-panels-left">
+    {% if author_total %}
+    <section class="authors-panel">
+      <details>
+        <summary><span class="panel-title">Authors</span> <span class="count-badge">{{ author_total }}</span></summary>
+        <div class="author-groups">
+          {% if ncnr_authors %}
+          <h3 class="author-group-title">{{ ncnr_label }} <span class="count-badge subtle">{{ ncnr_authors | length }}</span></h3>
+          {{ author_group(ncnr_authors) }}
+          {% endif %}
+          {% if other_authors %}
+          <h3 class="author-group-title">Other affiliations <span class="count-badge subtle">{{ other_authors | length }}</span></h3>
+          {{ author_group(other_authors) }}
+          {% endif %}
+        </div>
+      </details>
+    </section>
+    {% endif %}
+    {% if topic_stats %}
+    <section class="authors-panel topics-panel">
+      <details{% if active_topic %} open{% endif %}>
+        <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
+        <div class="chips">
+          {% for topic, count in topic_stats %}
+          {%- set is_active = active_topic and active_topic.id == topic.id -%}
+          <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
+             href="{% if is_active %}/{% else %}/?topic={{ topic.id }}{% endif %}"
+             title="{% if is_active %}Clear filter{% else %}{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+          {% endfor %}
+        </div>
+      </details>
+    </section>
+    {% endif %}
+  </div>
+  <section class="authors-panel meetings-panel">
+    <details>
+      <summary><span class="panel-title">Meetings</span> <span class="count-badge">{{ meeting_links | length }}</span></summary>
+      {% if meeting_links %}
+      <ul class="meeting-list">
+        {% for author, meeting_link in meeting_links %}
+        <li>
+          <a class="meeting-author" href="/authors/{{ author.id }}">{{ author.full_name }}</a>
+          <a class="btn" href="{{ meeting_link }}" target="_blank" rel="noopener">Join meeting</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty-panel">No meeting links saved.</p>
       {% endif %}
-      {% if other_authors %}
-      <h3 class="author-group-title">Other affiliations <span class="count-badge subtle">{{ other_authors | length }}</span></h3>
-      {{ author_group(other_authors) }}
-      {% endif %}
-    </div>
-  </details>
-</section>
-{% endif %}
-{% if topic_stats %}
-<section class="authors-panel topics-panel">
-  <details{% if active_topic %} open{% endif %}>
-    <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
-    <div class="chips">
-      {% for topic, count in topic_stats %}
-      {%- set is_active = active_topic and active_topic.id == topic.id -%}
-      <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
-         href="{% if is_active %}/{% else %}/?topic={{ topic.id }}{% endif %}"
-         title="{% if is_active %}Clear filter{% else %}{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
-      {% endfor %}
-    </div>
-  </details>
-</section>
-{% endif %}
+    </details>
+  </section>
+</div>
 {#- Counts live on the section headers below, so the page title carries none. -#}
 {% if active_topic %}
 <h1>Papers tagged “{{ active_topic.name }}”</h1>

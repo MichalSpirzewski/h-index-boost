@@ -29,6 +29,8 @@ class Article(Base):
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Free-form examples suggested by library users for citing this publication.
     citation_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Publisher Highlights fetched manually from the DOI landing page, one per line.
+    highlights: Mapped[str | None] = mapped_column(Text, nullable=True)
     crossref_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_text: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -122,6 +122,30 @@ def test_title_wording_is_not_mistaken_for_an_affiliation() -> None:
     assert not any("Integrated framework" in a for a in affs)
 
 
+def test_separate_marker_lines_map_each_author_to_the_right_affiliation() -> None:
+    """Elsevier PDFs can extract superscripts as standalone lines."""
+    pdf = _make_pdf(
+        "Impact of equipment reliability on safety classification of research reactors\n"
+        "Jacek Kałowski a, Karol Kowal a, Rafał Laskowski b, Grzegorz Mrugała a\n"
+        "a\n"
+        "National Centre for Nuclear Research (NCBJ), Otwock, Poland\n"
+        "b\n"
+        "Warsaw University of Technology (WUT), Warsaw, Poland\n"
+        "A B S T R A C T\nBody."
+    )
+
+    affs = extract_author_affiliations(
+        pdf,
+        ["Jacek Kałowski", "Karol Kowal", "Rafał Laskowski", "Grzegorz Mrugała"],
+    )
+
+    assert "NCBJ" in affs[0]
+    assert "NCBJ" in affs[1]
+    assert affs[2] == "Warsaw University of Technology (WUT), Warsaw, Poland"
+    assert "NCBJ" in affs[3]
+    assert not any("Impact of equipment" in affiliation for affiliation in affs)
+
+
 def test_centre_and_center_still_match_as_institutions() -> None:
     """Narrowing the stem must not cost us real centres."""
     for line in (

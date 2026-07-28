@@ -1,20 +1,89 @@
 {% extends "base.html" %}
+{% import "_export.html" as export %}
+{% macro sort_th(key, label, title="") %}
+  {%- set active = (sort == key) -%}
+  {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
+  <th class="sortable{% if active %} active{% endif %}"{% if title %} title="{{ title }}"{% endif %}>
+    <a href="/search?q={{ q | urlencode }}&sort={{ key }}&order={{ next_order }}">
+      {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
+    </a>
+  </th>
+{% endmacro %}
 {% block content %}
 <h1>Search</h1>
 {% if not q.strip() %}
 <p>Type a query above to search titles, abstracts, journals and the full text of stored PDFs.</p>
 {% elif results %}
 <p class="sort">{{ results | length }} result{{ "s" if results | length != 1 }} for “{{ q }}”</p>
-<ul class="results">
-  {% for hit in results %}
-  <li>
-    <a href="/articles/{{ hit.article.id }}">{{ hit.article.title or hit.article.doi or "(untitled)" }}</a>
-    {% if hit.article.year %}<span class="sort">({{ hit.article.year }})</span>{% endif %}
-    {% if hit.article.pdf_path %}<span class="chip">PDF</span>{% endif %}
-    <p class="snippet">{{ hit.snippet }}</p>
-  </li>
-  {% endfor %}
-</ul>
+
+{{ export.export_form_open() }}
+<input type="hidden" name="return_to"
+       value="/search?q={{ q | urlencode }}&sort={{ sort }}&order={{ order }}">
+{{ export.export_bar() }}
+<table class="wide-table search-results-table">
+  <colgroup>
+    <col class="article-col-select">
+    <col class="article-col-title">
+    <col class="article-col-count">
+    <col class="article-col-authors">
+    <col class="article-col-published">
+    <col class="article-col-online">
+    <col class="article-col-journal">
+    <col class="article-col-status">
+    <col class="article-col-cite">
+    <col class="article-col-pdf">
+  </colgroup>
+  <thead>
+    <tr>
+      {{ export.select_th() }}
+      {{ sort_th("title", "Title") }}
+      {{ sort_th("count", "Count", "Total occurrences of the searched terms in indexed article data") }}
+      {{ sort_th("author", "Authors") }}
+      {{ sort_th("year", "Published") }}
+      {{ sort_th("online", "Online") }}
+      {{ sort_th("journal", "Journal") }}
+      {{ sort_th("status", "Status") }}
+      <th>Cite first</th>
+      <th>PDF</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for hit in results %}
+    {% set article = hit.article %}
+    <tr{% if article.cite_first %} class="cite-first-row"{% endif %}>
+      {{ export.select_td(article) }}
+      <td class="article-title-cell">
+        <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
+        <p class="snippet">{{ hit.snippet }}</p>
+      </td>
+      <td class="search-count">{{ hit.count }}</td>
+      <td>
+        {%- for author in article.authors[:3] -%}
+          <a href="/authors/{{ author.id }}" title="{{ author.full_name }}">{{ author.full_name | short_name }}</a>{% if not loop.last %}, {% endif %}
+        {%- endfor -%}
+        {%- if article.authors | length > 3 %} et al.{% endif -%}
+      </td>
+      <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
+      <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
+      <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
+      <td><span class="status status-{{ article.status }}">{{ article.status }}</span></td>
+      <td class="cite-first-cell">
+        <button type="submit" formaction="/articles/{{ article.id }}/cite-first"
+                class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
+                aria-pressed="{{ 'true' if article.cite_first else 'false' }}"
+                title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">!</button>
+      </td>
+      <td class="row-actions">
+        {% if article.pdf_path %}
+        <a class="btn" href="/articles/{{ article.id }}/pdf" target="_blank" rel="noopener">View</a>
+        <a class="btn" href="/articles/{{ article.id }}/pdf?download=1">Download</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{{ export.export_form_close() }}
 {% else %}
 <p>No matches for “{{ q }}”.</p>
 {% endif %}

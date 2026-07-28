@@ -1,9 +1,20 @@
+import io
 import re
 import unicodedata
+import zipfile
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -41,6 +52,12 @@ def _startup() -> None:
         # Fold author rows left split by the ORCID-only matching used before the
         # name-match path existed; current ingest cannot create them any more.
         ingest.merge_duplicate_authors(session)
+        # Fold forms such as "E. Skrzypek" into a unique full-name match while
+        # leaving ambiguous initial + surname combinations untouched.
+        ingest.merge_initial_authors(session)
+        # Re-run affiliation mapping for legacy PDFs where separate marker lines
+        # previously caused every institution to be assigned to every author.
+        ingest.repair_shared_pdf_affiliations(session)
         # Same idea for the date columns: derive them from Crossref JSON already on
         # disk, so an existing library gains them without re-fetching anything.
         ingest.backfill_dates(session)
@@ -339,6 +356,16 @@ def index(
     ncnr_authors = [pair for pair in author_stats if pair[0].id in ncnr_ids]
     other_authors = [pair for pair in author_stats if pair[0].id not in ncnr_ids]
 
+    # Manually saved meeting shortcuts for authors currently represented in the
+    # library. Phone-only contact records deliberately do not appear here.
+    meeting_links = []
+    saved_contacts = contacts.load_all()
+    for author, _publication_count in author_stats:
+        meeting_link = saved_contacts.get(str(author.id), {}).get("meeting_link")
+        if meeting_link:
+            meeting_links.append((author, meeting_link))
+    meeting_links.sort(key=lambda pair: pair[0].full_name.casefold())
+
     # Keywords/topics across the library + how many articles carry each.
     topic_count = func.count(ArticleTopic.article_id)
     topic_stats = session.execute(
@@ -362,6 +389,7 @@ def index(
             "author_total": len(author_stats),
             "ncnr_authors": ncnr_authors,
             "other_authors": other_authors,
+            "meeting_links": meeting_links,
             "ncnr_label": _NCNR_LABEL,
             "topic_stats": topic_stats,
             "active_topic": active_topic,
@@ -376,6 +404,7 @@ def toggle_cite_first(
     sort: str = Form("year"),
     order: str = Form(""),
     topic: int | None = Form(None),
+    return_to: str | None = Form(None),
 ):
     """Flip the "cite this one first" flag; anyone can toggle it from the table."""
     article = session.get(Article, article_id)
@@ -383,6 +412,8 @@ def toggle_cite_first(
         raise HTTPException(status_code=404, detail="Article not found")
     article.cite_first = not article.cite_first
     session.commit()
+    if return_to and return_to.startswith("/") and not return_to.startswith("//"):
+        return RedirectResponse(return_to, status_code=303)
     params = {}
     if sort and sort != "year":  # "year" is the dashboard default; no need to spell it out
         params["sort"] = sort
@@ -400,15 +431,51 @@ def upload_page(request: Request):
 
 
 @app.get("/search")
-def search_page(request: Request, session: Session = Depends(db.get_db), q: str = ""):
+def search_page(
+    request: Request,
+    session: Session = Depends(db.get_db),
+    q: str = "",
+    sort: str = "relevance",
+    order: str = "",
+):
     results = []
     if q.strip():
         for article_id, snippet in db.search_articles(session, q):
             article = session.get(Article, article_id)
             if article and not article.hidden:
-                results.append({"article": article, "snippet": snippet})
+                results.append(
+                    {
+                        "article": article,
+                        "snippet": snippet,
+                        "count": db.count_search_matches(
+                            q,
+                            article.title,
+                            article.abstract,
+                            article.journal,
+                            article.pdf_text,
+                        ),
+                    }
+                )
+    search_sort_keys = set(_PUB_SORT_KEYS) | {"count", "status"}
+    if sort not in search_sort_keys and sort != "relevance":
+        sort = "relevance"
+    if sort != "relevance":
+        if order not in ("asc", "desc"):
+            order = "desc" if sort in ("count", "recent", "year", "online") else "asc"
+
+        def result_sort_key(hit: dict) -> tuple:
+            if sort == "count":
+                return hit["count"], hit["article"].created_at
+            if sort == "status":
+                article = hit["article"]
+                return article.status.casefold(), article.created_at
+            return _PUB_SORT_KEYS[sort](hit["article"])
+
+        results.sort(key=result_sort_key, reverse=(order == "desc"))
     return templates.TemplateResponse(
-        request, "search.html", {"q": q, "results": results}
+        request,
+        "search.html",
+        {"q": q, "results": results, "sort": sort, "order": order},
     )
 
 
@@ -623,6 +690,9 @@ def article_detail(
     check_dup: int = 0,
     rescanned: int = -1,
     citations_saved: int = 0,
+    highlights_fetched: int = 0,
+    highlights_failed: int = 0,
+    highlights_saved: int = 0,
 ):
     article = session.get(Article, article_id)
     if article is None or article.hidden:
@@ -645,7 +715,37 @@ def article_detail(
             "similar": similar,
             "rescanned": rescanned,
             "citations_saved": bool(citations_saved),
+            "highlights_fetched": bool(highlights_fetched),
+            "highlights_failed": bool(highlights_failed),
+            "highlights_saved": bool(highlights_saved),
         },
+    )
+
+
+@app.post("/articles/{article_id}/fetch-highlights")
+def fetch_article_highlights(
+    article_id: int,
+    session: Session = Depends(db.get_db),
+):
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+    if not article.doi:
+        raise HTTPException(status_code=400, detail="Article has no DOI")
+    if article.highlights:
+        return RedirectResponse(
+            f"/articles/{article_id}?highlights_fetched=1", status_code=303
+        )
+
+    highlights = ingest.fetch_publisher_highlights(article.doi)
+    if not highlights:
+        return RedirectResponse(
+            f"/articles/{article_id}?highlights_failed=1", status_code=303
+        )
+    article.highlights = "\n".join(highlights)
+    session.commit()
+    return RedirectResponse(
+        f"/articles/{article_id}?highlights_fetched=1", status_code=303
     )
 
 
@@ -662,6 +762,22 @@ def save_article_citation_examples(
     session.commit()
     return RedirectResponse(
         f"/articles/{article_id}?citations_saved=1", status_code=303
+    )
+
+
+@app.post("/articles/{article_id}/highlights")
+def save_article_highlights(
+    article_id: int,
+    session: Session = Depends(db.get_db),
+    highlights: str | None = Form(None),
+):
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+    article.highlights = _clean(highlights)
+    session.commit()
+    return RedirectResponse(
+        f"/articles/{article_id}?highlights_saved=1", status_code=303
     )
 
 
@@ -751,6 +867,84 @@ def export_word_xml(
         media_type="application/xml",
         headers={
             "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-refs.xml"'
+        },
+    )
+
+
+def _unique_archive_name(name: str, used: set[str]) -> str:
+    """Keep ZIP members distinct when selected articles produce the same cite key."""
+    candidate = name
+    stem, suffix = Path(name).stem, Path(name).suffix
+    number = 2
+    while candidate in used:
+        candidate = f"{stem}-{number}{suffix}"
+        number += 1
+    used.add(candidate)
+    return candidate
+
+
+def _pdf_archive(articles: list[Article], include_references: bool) -> bytes:
+    output = io.BytesIO()
+    used_names: set[str] = set()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if include_references:
+            archive.writestr(
+                "refbase-selected.bib", bibtex.export_bibtex(articles)
+            )
+            archive.writestr(
+                "refbase-selected.xml", word_xml.export_word_xml(articles)
+            )
+        for article in articles:
+            if not article.pdf_path:
+                continue
+            pdf_path = Path(article.pdf_path)
+            if not pdf_path.is_file():
+                continue
+            name = _unique_archive_name(bibtex.pdf_filename(article), used_names)
+            archive.write(pdf_path, arcname=f"pdfs/{name}")
+    return output.getvalue()
+
+
+@app.post("/export/pdfs")
+def export_pdfs(
+    request: Request,
+    ids: list[int] = Form(default=[]),
+    session: Session = Depends(db.get_db),
+):
+    """Download all available PDFs among the selected publications."""
+    if not ids:
+        return _empty_selection(request)
+    articles = _articles_for_export(session, ids)
+    has_pdf = any(
+        article.pdf_path and Path(article.pdf_path).is_file()
+        for article in articles
+    )
+    if not has_pdf:
+        raise HTTPException(status_code=404, detail="No selected articles have a PDF")
+    return Response(
+        _pdf_archive(articles, include_references=False),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-pdfs.zip"'
+        },
+    )
+
+
+@app.post("/export/all")
+def export_all_formats(
+    request: Request,
+    ids: list[int] = Form(default=[]),
+    session: Session = Depends(db.get_db),
+):
+    """Download merged BibTeX, Word XML, and all available PDFs in one ZIP."""
+    if not ids:
+        return _empty_selection(request)
+    articles = _articles_for_export(session, ids)
+    return Response(
+        _pdf_archive(articles, include_references=True),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-all.zip"'
         },
     )
 

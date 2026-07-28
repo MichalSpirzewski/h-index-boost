@@ -53,19 +53,61 @@
 {% endif %}
 {% if articles %}
 {{ export.export_form_open() }}
+<input type="hidden" name="return_to"
+       value="/authors/{{ author.id }}?sort={{ sort }}&order={{ order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
 {{ export.export_bar() }}
 <table class="wide-table">
-  <thead><tr>{{ export.select_th() }}{{ sort_th("title", "Title") }}{{ sort_th("year", "Published") }}{{ sort_th("online", "Online") }}{{ sort_th("journal", "Journal") }}</tr></thead>
+  <colgroup>
+    <col class="article-col-select">
+    <col class="article-col-title">
+    <col class="article-col-authors">
+    <col class="article-col-published">
+    <col class="article-col-online">
+    <col class="article-col-journal">
+    <col class="article-col-status">
+    <col class="article-col-cite">
+    <col class="article-col-pdf">
+  </colgroup>
+  <thead>
+    <tr>
+      {{ export.select_th() }}
+      {{ sort_th("title", "Title") }}
+      {{ sort_th("author", "Authors") }}
+      {{ sort_th("year", "Published") }}
+      {{ sort_th("online", "Online") }}
+      {{ sort_th("journal", "Journal") }}
+      <th>Status</th>
+      <th>Cite first</th>
+      <th>PDF</th>
+    </tr>
+  </thead>
   <tbody>
     {% for article in articles %}
-    {#- Same green as the dashboard, but no separate section and no toggle button:
-        this is a read-only cue that the paper is one the group asked to be cited. -#}
-    <tr{% if article.cite_first %} class="cite-first-row" title="Requested citing"{% endif %}>
+    <tr{% if article.cite_first %} class="cite-first-row"{% endif %}>
       {{ export.select_td(article) }}
-      <td><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td class="article-title-cell"><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td>
+        {%- for row_author in article.authors[:3] -%}
+          <a href="/authors/{{ row_author.id }}" title="{{ row_author.full_name }}">{{ row_author.full_name | short_name }}</a>{% if not loop.last %}, {% endif %}
+        {%- endfor -%}
+        {%- if article.authors | length > 3 %} et al.{% endif -%}
+      </td>
       <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
       <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
       <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
+      <td><span class="status status-{{ article.status }}">{{ article.status }}</span></td>
+      <td class="cite-first-cell">
+        <button type="submit" formaction="/articles/{{ article.id }}/cite-first"
+                class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
+                aria-pressed="{{ 'true' if article.cite_first else 'false' }}"
+                title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">!</button>
+      </td>
+      <td class="row-actions">
+        {% if article.pdf_path %}
+        <a class="btn" href="/articles/{{ article.id }}/pdf" target="_blank" rel="noopener">View</a>
+        <a class="btn" href="/articles/{{ article.id }}/pdf?download=1">Download</a>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>

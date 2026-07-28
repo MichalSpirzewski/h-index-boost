@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="article-detail-layout">
 {% if added %}
 <div class="banner ok">
   Added to the library.
@@ -20,6 +21,10 @@
     PDF rescanned — no keywords found in its metadata or first pages.
   {% endif %}
 </div>
+{% endif %}
+{% if highlights_fetched %}<div class="banner ok">Publisher Highlights saved.</div>{% endif %}
+{% if highlights_failed %}
+<div class="banner warn">No Highlights could be retrieved. The publisher may block automated access or may not expose them in the page HTML.</div>
 {% endif %}
 {% if similar %}
 <div class="banner warn">
@@ -55,21 +60,47 @@
 <dl>
   {% if article.journal %}<dt>Journal</dt><dd><a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% if article.year %} ({{ article.year }}){% endif %}</dd>{% endif %}
   {% if article.published_date %}<dt>Published</dt><dd>{{ article.published_date }}{% if article.online_date and article.online_date != article.published_date %} <span class="subtle">(online {{ article.online_date }})</span>{% endif %}</dd>{% endif %}
-  {% if article.doi %}<dt>DOI</dt><dd><a href="https://doi.org/{{ article.doi }}">{{ article.doi }}</a></dd>{% endif %}
+  {% if article.doi %}
+  <dt>DOI</dt>
+  <dd>
+    <a href="https://doi.org/{{ article.doi }}">{{ article.doi }}</a>
+    {% if not article.highlights %}
+    <form method="post" action="/articles/{{ article.id }}/fetch-highlights" class="inline-form" hidden>
+      <button type="submit" class="btn">Fetch Highlights</button>
+    </form>
+    {% endif %}
+  </dd>
+  {% endif %}
   {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
   {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
 </dl>
-{% if article.abstract %}<h2>Abstract</h2><p>{{ article.abstract }}</p>{% endif %}
 
-<section class="citation-examples">
-  <h2>Przykłady cytowania</h2>
-  {% if citations_saved %}<p class="saved-note">✓ Zapisano przykłady cytowania.</p>{% endif %}
-  <form method="post" action="/articles/{{ article.id }}/citation-examples">
-    <textarea name="citation_examples" rows="6"
-              placeholder="Dodaj tutaj 3-4 przykłady jak ten artykuł mógłby być cytowany w innych pracach">{{ article.citation_examples or "" }}</textarea>
-    <button type="submit">Zapisz</button>
-  </form>
-</section>
+<div class="article-notes-grid">
+  <section class="citation-examples">
+    <h2>Przykłady cytowania</h2>
+    <form method="post" action="/articles/{{ article.id }}/citation-examples">
+      <textarea name="citation_examples" rows="8"
+                placeholder="Dodaj tutaj 3-4 przykłady jak ten artykuł mógłby być cytowany w innych pracach">{{ article.citation_examples or "" }}</textarea>
+      <div class="editor-actions">
+        <button type="submit">Zapisz</button>
+        {% if citations_saved %}<span class="saved-note">✓ Zapisano przykłady cytowania.</span>{% endif %}
+      </div>
+    </form>
+  </section>
+  <section class="citation-examples highlights-editor">
+    <h2>Highlights</h2>
+    <form method="post" action="/articles/{{ article.id }}/highlights">
+      <textarea name="highlights" rows="8"
+                placeholder="Dodaj ręcznie Highlights, każdy w osobnej linii">{{ article.highlights or "" }}</textarea>
+      <div class="editor-actions">
+        <button type="submit">Zapisz</button>
+        {% if highlights_saved %}<span class="saved-note">✓ Zapisano Highlights.</span>{% endif %}
+      </div>
+    </form>
+  </section>
+</div>
+
+{% if article.abstract %}<h2>Abstract</h2><p>{{ article.abstract }}</p>{% endif %}
 
 <p class="row-actions">
   {% if article.pdf_path %}
@@ -124,4 +155,5 @@
   <button type="submit">Rescan PDF for keywords</button>
 </form>
 {% endif %}
+</div>
 {% endblock %}

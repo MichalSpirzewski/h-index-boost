@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from markupsafe import Markup, escape
@@ -74,6 +75,8 @@ def init_db() -> None:
             )
         if article_cols and "citation_examples" not in article_cols:
             conn.execute(text("ALTER TABLE articles ADD COLUMN citation_examples TEXT"))
+        if article_cols and "highlights" not in article_cols:
+            conn.execute(text("ALTER TABLE articles ADD COLUMN highlights TEXT"))
 
         for column in ("published_date", "online_date"):
             if article_cols and column not in article_cols:
@@ -104,6 +107,13 @@ def _fts_match_expr(query: str) -> str:
     """Quote each term as a phrase so user input can't break FTS5 query syntax."""
     terms = [term.replace('"', "") for term in query.split()]
     return " ".join(f'"{term}"' for term in terms if term)
+
+
+def count_search_matches(query: str, *texts: str | None) -> int:
+    """Count occurrences of each searched term across the FTS-indexed fields."""
+    terms = [term.casefold() for term in re.findall(r"\w+", query, re.UNICODE)]
+    content = "\n".join(text or "" for text in texts).casefold()
+    return sum(content.count(term) for term in terms)
 
 
 def search_articles(session: Session, query: str, limit: int = 50) -> list[tuple[int, Markup]]:

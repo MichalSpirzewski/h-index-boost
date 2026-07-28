@@ -54,6 +54,27 @@ def test_journal_ampersand_is_normalized_to_and(
     )
 
 
+def test_highlights_are_extracted_from_publisher_html() -> None:
+    from app.ingest import extract_highlights_html
+
+    page = """
+      <html><body>
+        <h2><span>Highlights</span></h2>
+        <ul>
+          <li><p>First reported result.</p></li>
+          <li>Safety performance was improved.</li>
+        </ul>
+        <h2>Abstract</h2>
+        <ul><li>This is not a highlight.</li></ul>
+      </body></html>
+    """
+
+    assert extract_highlights_html(page) == [
+        "First reported result.",
+        "Safety performance was improved.",
+    ]
+
+
 def test_hardcoded_name_alias_groups_nowak(client) -> None:
     """'Mateusz Marek Nowak' and 'Mateusz Nowak' must resolve to one canonical author."""
     from app import db, ingest
@@ -217,6 +238,55 @@ def test_name_key_folds_diacritics_case_and_spacing() -> None:
     assert author_name_key("Mariusz Dąbrowski") == author_name_key("Mariusz Dabrowski")
     # Different people stay different.
     assert author_name_key("Piotr Darnowski") != author_name_key("Piotr Domitr")
+
+
+def test_first_initial_and_surname_match_unique_full_name(client) -> None:
+    from app import db, ingest
+
+    with db.SessionLocal() as session:
+        full = ingest._get_or_create_author(
+            session, "Eleonora Skrzypek", "0000-0003-4322-7021"
+        )
+        abbreviated = ingest._get_or_create_author(session, "E. Skrzypek", None)
+        session.commit()
+
+        assert abbreviated.id == full.id
+        assert abbreviated.full_name == "Eleonora Skrzypek"
+
+
+def test_initial_match_does_not_guess_when_full_names_are_ambiguous(client) -> None:
+    from app import db, ingest
+    from app.models import Author
+
+    with db.SessionLocal() as session:
+        session.add_all(
+            [
+                Author(full_name="Eleonora Smith"),
+                Author(full_name="Ewa Smith"),
+            ]
+        )
+        session.flush()
+        abbreviated = ingest._get_or_create_author(session, "E. Smith", None)
+        session.commit()
+
+        assert abbreviated.full_name == "E. Smith"
+        assert len(session.scalars(select(Author)).all()) == 3
+
+
+def test_legacy_initial_author_is_merged_retroactively(client) -> None:
+    from app import db, ingest
+    from app.models import Author
+
+    with db.SessionLocal() as session:
+        full = Author(full_name="Eleonora Skrzypek")
+        abbreviated = Author(full_name="E. Skrzypek")
+        session.add_all([full, abbreviated])
+        session.commit()
+        full_id, abbreviated_id = full.id, abbreviated.id
+
+    with db.SessionLocal() as session:
+        assert ingest.merge_initial_authors(session) == 1
+        assert session.get(Author, abbreviated_id).merged_into_id == full_id
 
 
 def test_merge_duplicate_authors_folds_legacy_rows(client) -> None:

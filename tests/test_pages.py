@@ -1,4 +1,6 @@
 import copy
+import io
+import zipfile
 
 
 def _ingest_with_authors(client, monkeypatch, base_message, doi, families):
@@ -180,6 +182,33 @@ def test_journal_page_404_for_unknown_journal(client) -> None:
     assert client.get("/journals/Unknown%20Journal").status_code == 404
 
 
+def test_author_and_journal_tables_match_dashboard_actions(client) -> None:
+    body = client.post(
+        "/api/ingest",
+        data={"doi": "10.1038/nphys1170"},
+        files={"file": ("paper.pdf", b"%PDF-1.4 fake pdf bytes", "application/pdf")},
+    ).json()
+    article_id = body["article_id"]
+
+    for url in ("/authors/1", "/journals/Nature%20Physics"):
+        page = client.get(url).text
+        assert ">Authors<" in page
+        assert ">Status<" in page
+        assert ">Cite first<" in page
+        assert ">PDF<" in page
+        assert f'href="/articles/{article_id}/pdf"' in page
+        assert f'href="/articles/{article_id}/pdf?download=1"' in page
+        assert f'formaction="/articles/{article_id}/cite-first"' in page
+
+    response = client.post(
+        f"/articles/{article_id}/cite-first",
+        data={"return_to": "/authors/1?sort=year&order=desc"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/authors/1?sort=year&order=desc"
+
+
 def test_dashboard_shows_pdf_actions_only_when_pdf_attached(client, monkeypatch) -> None:
     from app import ingest
 
@@ -284,6 +313,54 @@ def test_article_page_can_save_citation_examples(client) -> None:
     assert example in client.get(f"/articles/{article_id}").text
 
 
+def test_article_page_can_fetch_publisher_highlights_once(
+    client, monkeypatch
+) -> None:
+    from app import ingest
+
+    article_id = client.post(
+        "/api/ingest", data={"doi": "10.9999/highlights"}
+    ).json()["article_id"]
+    page = client.get(f"/articles/{article_id}").text
+    assert f'action="/articles/{article_id}/fetch-highlights"' in page
+
+    calls = []
+
+    def fake_fetch(doi):
+        calls.append(doi)
+        return ["First highlight.", "Second highlight."]
+
+    monkeypatch.setattr(ingest, "fetch_publisher_highlights", fake_fetch)
+    response = client.post(f"/articles/{article_id}/fetch-highlights")
+
+    assert response.status_code == 200
+    assert "Publisher Highlights saved." in response.text
+    assert "First highlight.\nSecond highlight." in response.text
+    assert "Fetch Highlights" not in response.text
+    assert calls == ["10.9999/highlights"]
+
+    client.post(f"/articles/{article_id}/fetch-highlights")
+    assert calls == ["10.9999/highlights"]  # stored result is not fetched twice
+
+
+def test_article_page_can_save_highlights_manually(client) -> None:
+    article_id = client.post(
+        "/api/ingest", data={"doi": "10.1038/nphys1170"}
+    ).json()["article_id"]
+    highlights = "First manual highlight.\nSecond manual highlight."
+
+    response = client.post(
+        f"/articles/{article_id}/highlights",
+        data={"highlights": highlights},
+    )
+
+    assert response.status_code == 200
+    assert "Zapisano Highlights." in response.text
+    assert highlights in response.text
+    assert response.text.index("Przykłady cytowania") < response.text.index("Abstract")
+    assert response.text.index("Highlights") < response.text.index("Abstract")
+
+
 def test_saving_citation_examples_for_unknown_article_returns_404(client) -> None:
     response = client.post(
         "/articles/999/citation-examples",
@@ -341,6 +418,8 @@ def test_dashboard_and_author_page_offer_multi_select_export(
         assert 'class="js-export-form"' in page.text
         assert 'formaction="/export/bibtex"' in page.text
         assert 'formaction="/export/word-xml"' in page.text
+        assert 'formaction="/export/pdfs"' in page.text
+        assert 'formaction="/export/all"' in page.text
         assert 'name="ids"' in page.text
 
 
@@ -362,6 +441,51 @@ def test_merged_word_export_of_selected_ids(client, monkeypatch, crossref_messag
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/xml")
     assert resp.text.count("<b:Source>") == len(ids)
+
+
+def test_selected_pdfs_and_all_formats_download_as_zip(
+    client, monkeypatch, crossref_message
+) -> None:
+    from app import ingest
+
+    ids = []
+    for index, family in enumerate(("Adams", "Baker"), start=1):
+        message = copy.deepcopy(crossref_message)
+        message["DOI"] = f"10.9999/zip-{index}"
+        message["title"] = [f"ZIP paper {index}"]
+        message["author"] = [
+            {"given": "Alex", "family": family, "sequence": "first"}
+        ]
+        monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi, m=message: m)
+        body = client.post(
+            "/api/ingest",
+            data={"doi": message["DOI"]},
+            files={
+                "file": (
+                    f"paper-{index}.pdf",
+                    b"%PDF-1.4 selected test PDF",
+                    "application/pdf",
+                )
+            },
+        ).json()
+        ids.append(body["article_id"])
+
+    pdf_response = client.post("/export/pdfs", data={"ids": ids})
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(pdf_response.content)) as archive:
+        pdf_members = [name for name in archive.namelist() if name.endswith(".pdf")]
+        assert len(pdf_members) == 2
+
+    all_response = client.post("/export/all", data={"ids": ids})
+    assert all_response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(all_response.content)) as archive:
+        names = archive.namelist()
+        assert "refbase-selected.bib" in names
+        assert "refbase-selected.xml" in names
+        assert len([name for name in names if name.endswith(".pdf")]) == 2
+        assert archive.read("refbase-selected.bib").count(b"@article{") == 2
+        assert archive.read("refbase-selected.xml").count(b"<b:Source>") == 2
 
 
 def test_export_of_a_subset_only_includes_that_subset(

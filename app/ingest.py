@@ -11,6 +11,7 @@ import re
 import unicodedata
 import uuid
 from collections import defaultdict
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -232,7 +233,7 @@ def extract_keywords_from_pdf(pdf_bytes: bytes) -> list[str]:
 _AFF_KEYWORD_RE = re.compile(
     r"\b(Universi|Univerz|Institut|Instytut|Centrum|Department"
     r"|Laborator|Faculty|Fakult|School|College|Academy|Academia|Akadem"
-    r"|Politech|Politecnico|Ministr|Hospital|Wydział|Division|GmbH|Research"
+    r"|Politech|Politecnico|Ministr|Hospital|Wydział|Division|GmbH"
     # "Cent(re|er)" is closed with a boundary rather than left open like the stems
     # above: as a stem it also fires inside "reliability-centered", which is title
     # wording, not an institution. A hyphen counts as a word boundary, so the
@@ -300,12 +301,18 @@ def extract_author_affiliations(
     ordered_affs: list[str] = []
     first_aff_line = len(lines)
     in_aff_block = False  # once True, marker lines are affiliations regardless of language
+    pending_marker: str | None = None
     for i, line in enumerate(lines[:40]):
         s = line.strip()
         if not s:
             continue
         if ordered_affs and _AFF_BOUNDARY_RE.match(s):
             break
+        # Some publisher PDFs extract a superscript marker as its own line:
+        # "a" followed by "National Centre...", rather than one combined line.
+        if re.fullmatch(r"[a-z]|\d{1,2}", s, re.IGNORECASE):
+            pending_marker = s.lower()
+            continue
         marked = _MARKED_AFF_RE.match(s)
         # A marker-prefixed line is an affiliation if it looks like one (keyword) OR
         # we're already inside the block — a continuation like a Czech "b Fakulta …"
@@ -322,7 +329,11 @@ def extract_author_affiliations(
             and len(s) >= _MIN_AFF_LEN
             and not s.lower().startswith("contents")
         ):
-            ordered_affs.append(_clean_affiliation(s))
+            aff = _clean_affiliation(s)
+            ordered_affs.append(aff)
+            if pending_marker is not None:
+                marker_map[pending_marker] = aff
+                pending_marker = None
             first_aff_line = min(first_aff_line, i)
             in_aff_block = True
 
@@ -415,6 +426,72 @@ def download_pdf(url: str) -> bytes | None:
     except Exception:
         pass
     return None
+
+
+class _HighlightsParser(HTMLParser):
+    """Small DOI-page parser: collect list items following a Highlights heading."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_heading = False
+        self.heading_text: list[str] = []
+        self.in_highlights = False
+        self.in_item = False
+        self.item_text: list[str] = []
+        self.highlights: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("h1", "h2", "h3", "h4"):
+            if self.in_highlights:
+                self.in_highlights = False
+            self.in_heading = True
+            self.heading_text = []
+        elif tag == "li" and self.in_highlights:
+            self.in_item = True
+            self.item_text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("h1", "h2", "h3", "h4") and self.in_heading:
+            heading = " ".join("".join(self.heading_text).split()).casefold()
+            self.in_highlights = heading == "highlights"
+            self.in_heading = False
+        elif tag == "li" and self.in_item:
+            item = " ".join("".join(self.item_text).split())
+            if item and item not in self.highlights:
+                self.highlights.append(item)
+            self.in_item = False
+
+    def handle_data(self, data: str) -> None:
+        if self.in_heading:
+            self.heading_text.append(data)
+        elif self.in_item:
+            self.item_text.append(data)
+
+
+def extract_highlights_html(page_html: str) -> list[str]:
+    parser = _HighlightsParser()
+    parser.feed(page_html)
+    return parser.highlights
+
+
+def fetch_publisher_highlights(doi: str) -> list[str]:
+    """One-time, user-triggered scrape of a DOI landing page."""
+    try:
+        response = httpx.get(
+            f"https://doi.org/{doi}",
+            follow_redirects=True,
+            timeout=30,
+            headers={
+                "User-Agent": (
+                    "RefBase/1.0 (one-time metadata retrieval; "
+                    f"mailto:{CROSSREF_MAILTO})"
+                )
+            },
+        )
+        response.raise_for_status()
+    except Exception:
+        return []
+    return extract_highlights_html(response.text)
 
 
 # --------------------------------------------------------------------------- metadata mapping
@@ -547,13 +624,55 @@ _NAME_TRANSLIT = str.maketrans({"ł": "l", "Ł": "L", "ø": "o", "đ": "d", "ß"
 def author_name_key(full_name: str) -> str:
     """Normalized identity for a person's name: case, diacritics and spacing folded.
 
-    Not fuzzy matching — no similarity threshold, no initials guessing. It only
-    treats "Sławomir Potempski" and "Slawomir Potempski" as the one person they
-    are, which PDFs and Crossref spell inconsistently even for the same paper.
+    Not fuzzy matching — no similarity threshold. It treats "Sławomir Potempski"
+    and "Slawomir Potempski" as the one person they are, which PDFs and Crossref
+    spell inconsistently even for the same paper.
     """
     decomposed = unicodedata.normalize("NFKD", full_name)
     stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
     return " ".join(stripped.translate(_NAME_TRANSLIT).lower().split())
+
+
+def author_initial_surname_key(full_name: str) -> tuple[str, str] | None:
+    """Return (first initial, surname), e.g. both Eleonora and E. -> (e, skrzypek)."""
+    parts = author_name_key(full_name).split()
+    if len(parts) < 2:
+        return None
+    first = re.sub(r"[^a-z0-9]", "", parts[0])
+    surname = re.sub(r"[^a-z0-9]", "", parts[-1])
+    if not first or not surname:
+        return None
+    return first[0], surname
+
+
+def _uses_first_initial(full_name: str) -> bool:
+    parts = author_name_key(full_name).split()
+    return bool(parts) and len(re.sub(r"[^a-z0-9]", "", parts[0])) == 1
+
+
+def merge_initial_authors(session: Session) -> int:
+    """Fold abbreviated legacy names into one unambiguous full-name match."""
+    authors = list(
+        session.scalars(select(Author).where(Author.merged_into_id.is_(None)))
+    )
+    full_by_key: dict[tuple[str, str], list[Author]] = defaultdict(list)
+    for author in authors:
+        key = author_initial_surname_key(author.full_name)
+        if key is not None and not _uses_first_initial(author.full_name):
+            full_by_key[key].append(author)
+
+    merged = 0
+    for source in authors:
+        if not _uses_first_initial(source.full_name):
+            continue
+        key = author_initial_surname_key(source.full_name)
+        candidates = full_by_key.get(key, []) if key is not None else []
+        if len(candidates) == 1:
+            merge_authors(session, source, candidates[0])
+            merged += 1
+    if merged:
+        session.commit()
+    return merged
 
 
 def merge_duplicate_authors(session: Session) -> int:
@@ -606,6 +725,26 @@ def _get_or_create_author(session: Session, full_name: str, orcid: str | None) -
         if orcid and author.orcid is None:
             author.orcid = orcid
         return author
+
+    # Crossref and PDFs sometimes provide only "E. Skrzypek". Resolve that to a
+    # full name only when the initial + surname identifies exactly one candidate.
+    incoming_key = author_initial_surname_key(full_name)
+    if incoming_key is not None:
+        candidates = [
+            author
+            for author in session.scalars(
+                select(Author).where(Author.merged_into_id.is_(None))
+            )
+            if author_initial_surname_key(author.full_name) == incoming_key
+            and _uses_first_initial(author.full_name) != _uses_first_initial(full_name)
+        ]
+        if len(candidates) == 1:
+            author = candidates[0]
+            if not _uses_first_initial(full_name):
+                author.full_name = full_name
+            if orcid and author.orcid is None:
+                author.orcid = orcid
+            return author
     author = Author(full_name=full_name, orcid=orcid)
     session.add(author)
     session.flush()
@@ -824,6 +963,48 @@ def apply_pdf_affiliations(session: Session, article: Article) -> int:
     if filled:
         session.commit()
     return filled
+
+
+def repair_shared_pdf_affiliations(session: Session) -> int:
+    """Repair legacy rows where a failed marker parse gave everyone every affiliation.
+
+    Only suspicious articles are touched: multiple authors all have the identical
+    semicolon-joined value, and a fresh parse now resolves at least two distinct
+    author affiliations.
+    """
+    repaired = 0
+    articles = session.scalars(
+        select(Article).where(Article.pdf_path.is_not(None))
+    ).all()
+    for article in articles:
+        links = session.scalars(
+            select(ArticleAuthor)
+            .where(ArticleAuthor.article_id == article.id)
+            .order_by(ArticleAuthor.position)
+        ).all()
+        stored = {link.affiliation for link in links if link.affiliation}
+        if len(links) < 2 or len(stored) != 1:
+            continue
+        shared = next(iter(stored), "")
+        if "; " not in shared:
+            continue
+        try:
+            pdf_bytes = Path(article.pdf_path or "").read_bytes()
+        except OSError:
+            continue
+        parsed = extract_author_affiliations(
+            pdf_bytes, [link.author.full_name for link in links]
+        )
+        resolved = {affiliation for affiliation in parsed if affiliation}
+        if len(resolved) < 2:
+            continue
+        for link, affiliation in zip(links, parsed, strict=False):
+            if affiliation and link.affiliation != affiliation:
+                link.affiliation = affiliation
+                repaired += 1
+    if repaired:
+        session.commit()
+    return repaired
 
 
 def _backfill_abstract(article: Article, pdf_bytes: bytes) -> None:
