@@ -62,7 +62,8 @@
 <h1>
   {%- if is_default %}Latest publications
   {%- elif sort == "recent" %}Recently added
-  {%- else %}All articles{% endif -%}
+  {%- else %}All articles{% endif %}
+  <span class="count-badge">{{ article_total }}</span>
 </h1>
 <p class="sort">
   {%- if is_default %}Newest published first. Click a column header to sort.
@@ -82,6 +83,7 @@
       {{ sort_th("online", "Online") }}
       {{ sort_th("journal", "Journal") }}
       {{ sort_th("status", "Status") }}
+      <th>Cite first</th>
       <th>PDF</th>
     </tr>
   </thead>
@@ -115,6 +117,15 @@
           "metadata_failed": "Crossref lookup failed; only the PDF / basic info is available."
         } -%}
         <span class="status status-{{ article.status }}" title="{{ status_help.get(article.status, article.status) }}">{{ article.status }}</span>
+      </td>
+      <td class="cite-first-cell">
+        <form method="post" action="/articles/{{ article.id }}/cite-first">
+          <input type="hidden" name="sort" value="{{ sort }}">
+          <input type="hidden" name="order" value="{{ order }}">
+          {% if active_topic %}<input type="hidden" name="topic" value="{{ active_topic.id }}">{% endif %}
+          <button type="submit" class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
+                  title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">❗</button>
+        </form>
       </td>
       <td class="row-actions">
         {% if article.pdf_path %}

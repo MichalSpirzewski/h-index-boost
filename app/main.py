@@ -292,6 +292,10 @@ def index(
     # Show the whole tagged set when filtering; otherwise the most recent window.
     articles = list(session.scalars(query if active_topic is not None else query.limit(20)))
 
+    article_total = session.scalar(
+        select(func.count(Article.id)).where(Article.hidden.is_(False))
+    )
+
     if sort == "author":
         def first_author_surname(article: Article) -> tuple[int, str]:
             if not article.author_links:
@@ -340,6 +344,7 @@ def index(
         "index.html",
         {
             "articles": articles,
+            "article_total": article_total,
             "sort": sort,
             "order": order,
             "author_total": len(author_stats),
@@ -350,6 +355,31 @@ def index(
             "active_topic": active_topic,
         },
     )
+
+
+@app.post("/articles/{article_id}/cite-first")
+def toggle_cite_first(
+    article_id: int,
+    session: Session = Depends(db.get_db),
+    sort: str = Form("year"),
+    order: str = Form(""),
+    topic: int | None = Form(None),
+):
+    """Flip the "cite this one first" flag; anyone can toggle it from the table."""
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+    article.cite_first = not article.cite_first
+    session.commit()
+    params = {}
+    if sort and sort != "year":  # "year" is the dashboard default; no need to spell it out
+        params["sort"] = sort
+    if order:
+        params["order"] = order
+    if topic is not None:
+        params["topic"] = topic
+    query = "&".join(f"{key}={value}" for key, value in params.items())
+    return RedirectResponse(f"/{'?' + query if query else ''}", status_code=303)
 
 
 @app.get("/upload")

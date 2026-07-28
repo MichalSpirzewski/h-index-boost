@@ -185,6 +185,24 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
 .status-metadata_failed { background: #fde8e8; color: #9b2020; border-color: #f2c2c2; }
 .legend { color: #666; font-size: 0.85rem; margin-top: 0.6rem; }
 
+.cite-first-cell form { margin: 0; }
+.cite-first-btn {
+  border: 1px solid #ccd6e0;
+  border-radius: 4px;
+  background: #f7f9fb;
+  color: #b8bfc7;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.2rem 0.45rem;
+}
+.cite-first-btn:hover { background: #eef2f7; }
+.cite-first-btn.cite-first-active {
+  background: #fff6e0;
+  border-color: #f0dca0;
+  color: #8a6100;
+}
+
 .row-actions { white-space: nowrap; }
 .btn {
   display: inline-block;

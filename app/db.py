@@ -68,6 +68,10 @@ def init_db() -> None:
         article_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(articles)"))]
         if article_cols and "pdf_text" not in article_cols:
             conn.execute(text("ALTER TABLE articles ADD COLUMN pdf_text TEXT"))
+        if article_cols and "cite_first" not in article_cols:
+            conn.execute(
+                text("ALTER TABLE articles ADD COLUMN cite_first BOOLEAN DEFAULT 0")
+            )
 
         for column in ("published_date", "online_date"):
             if article_cols and column not in article_cols:

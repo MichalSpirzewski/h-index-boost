@@ -34,6 +34,9 @@ class Article(Base):
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")  # pending/ready/metadata_failed
     hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Manually flagged by anyone as "cite this one first" (e.g. among near-duplicates
+    # or a series of related papers) so co-authors know which version to reference.
+    cite_first: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )

@@ -168,6 +168,41 @@ def test_dashboard_shows_pdf_actions_only_when_pdf_attached(client, monkeypatch)
     assert f'/articles/{without_pdf["article_id"]}/pdf"' not in page
 
 
+def test_cite_first_toggle_marks_and_unmarks_article(client) -> None:
+    article_id = client.post("/api/ingest", data={"doi": "10.9999/cite-first"}).json()["article_id"]
+
+    page = client.get("/").text
+    assert 'cite-first-active' not in page
+
+    # Mirrors what the dashboard form submits on its default (newest-published) view.
+    default_view = {"sort": "year", "order": "desc"}
+
+    marked = client.post(f"/articles/{article_id}/cite-first", data=default_view)
+    assert marked.status_code == 200  # redirect followed
+    assert 'cite-first-active' in marked.text
+
+    unmarked = client.post(f"/articles/{article_id}/cite-first", data=default_view)
+    assert 'cite-first-active' not in unmarked.text
+
+
+def test_cite_first_toggle_preserves_the_active_sort(client) -> None:
+    """The redirect must land back on the view the user was looking at, not the default."""
+    article_id = client.post("/api/ingest", data={"doi": "10.9999/cite-sort"}).json()["article_id"]
+
+    resp = client.post(
+        f"/articles/{article_id}/cite-first",
+        data={"sort": "recent", "order": "desc"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/?sort=recent&order=desc"
+
+
+def test_cite_first_toggle_404_for_unknown_article(client) -> None:
+    resp = client.post("/articles/999/cite-first", data={"sort": "year", "order": "desc"})
+    assert resp.status_code == 404
+
+
 def test_article_pdf_view_is_inline_download_is_attachment(client) -> None:
     body = client.post(
         "/api/ingest",
