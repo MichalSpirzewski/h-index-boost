@@ -58,6 +58,9 @@ def _startup() -> None:
         # Re-run affiliation mapping for legacy PDFs where separate marker lines
         # previously caused every institution to be assigned to every author.
         ingest.repair_shared_pdf_affiliations(session)
+        # Retry author links the header parser left empty — accent handling has
+        # improved since some rows were written, and the PDFs are already on disk.
+        ingest.backfill_missing_pdf_affiliations(session)
         # Same idea for the date columns: derive them from Crossref JSON already on
         # disk, so an existing library gains them without re-fetching anything.
         ingest.backfill_dates(session)

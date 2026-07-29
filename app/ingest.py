@@ -259,15 +259,57 @@ def _clean_affiliation(raw: str) -> str:
     return text[:_MAX_AFF_LEN].strip()
 
 
+# Accents that publisher fonts emit as their own character instead of composing
+# them into the letter: Elsevier renders "Prusiński" as "Prusi´nski" (U+00B4 then
+# a bare "n"). NFKD turns these into a space plus a combining mark, so they need
+# dropping outright rather than decomposing, or the fold leaves a stray gap.
+_SPACING_ACCENTS = frozenset("`^~¨¯´¸ˆˇ˘˙˚˛˜˝")
+# Letters with no NFKD decomposition; without these, Polish "ł" or Nordic "ø"
+# would survive the fold and still fail to match their ASCII rendering.
+_LETTER_FOLDS = {
+    "ł": "l", "đ": "d", "ð": "d", "ø": "o", "æ": "ae", "œ": "oe",
+    "ß": "ss", "þ": "th", "ħ": "h", "ı": "i", "ŋ": "n",
+}
+
+
+def _fold_diacritics(text: str) -> tuple[str, list[int]]:
+    """Strip accents from `text`, returning the folded string and, per folded
+    character, the index it came from in the original. The index map lets callers
+    slice the *original* text around a match found in the folded one."""
+    folded: list[str] = []
+    origin: list[int] = []
+    for i, char in enumerate(text):
+        if char in _SPACING_ACCENTS:
+            continue
+        replacement = _LETTER_FOLDS.get(char.lower())
+        if replacement is not None:
+            replacement = replacement.upper() if char.isupper() else replacement
+        else:
+            decomposed = unicodedata.normalize("NFKD", char)
+            replacement = "".join(c for c in decomposed if not unicodedata.combining(c))
+        for out in replacement:
+            folded.append(out)
+            origin.append(i)
+    return "".join(folded), origin
+
+
 def _author_markers(region: str, full_name: str) -> list[str]:
     """Superscript markers (a, b, 1, 2…) trailing an author's name in the header block."""
     family = full_name.split()[-1] if full_name.split() else ""
     if not family:
         return []
-    idx = region.find(family)
+    # Match on the accent-folded forms: Crossref stores precomposed characters
+    # ("Prusiński") while the PDF may spell the same name with a detached accent,
+    # and a literal substring search would miss every such author.
+    folded_region, origin = _fold_diacritics(region)
+    folded_family, _ = _fold_diacritics(family)
+    if not folded_family:
+        return []
+    idx = folded_region.find(folded_family)
     if idx == -1:
         return []
-    tail = region[idx + len(family):][:20]
+    # Markers follow the last character of the name in the *original* string.
+    tail = region[origin[idx + len(folded_family) - 1] + 1:][:20]
     # Markers are lowercase letters/digits; author names are capitalized, so a
     # case-sensitive match stops the run before it bleeds into the next name.
     match = re.match(r"[\s*∗†,]*([a-z0-9](?:\s*,\s*[a-z0-9])*)", tail)
@@ -1005,6 +1047,28 @@ def repair_shared_pdf_affiliations(session: Session) -> int:
     if repaired:
         session.commit()
     return repaired
+
+
+def backfill_missing_pdf_affiliations(session: Session) -> int:
+    """Re-parse stored PDFs for author links still missing an affiliation.
+
+    Complements `repair_shared_pdf_affiliations`, which only rewrites articles
+    where everyone shares one joined value. Rows left NULL by an earlier parse —
+    e.g. a name the header spelled with a detached accent — are retried here, so
+    parser improvements reach an existing library without re-ingesting anything.
+    Articles whose header genuinely yields nothing are re-read on each startup;
+    that is a handful of first-page parses, not a fetch.
+    """
+    filled = 0
+    articles = session.scalars(
+        select(Article)
+        .join(ArticleAuthor, ArticleAuthor.article_id == Article.id)
+        .where(Article.pdf_path.is_not(None), ArticleAuthor.affiliation.is_(None))
+        .distinct()
+    ).all()
+    for article in articles:
+        filled += apply_pdf_affiliations(session, article)
+    return filled
 
 
 def _backfill_abstract(article: Article, pdf_bytes: bytes) -> None:

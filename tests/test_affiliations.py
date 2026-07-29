@@ -1,12 +1,40 @@
+import os
+
 import fitz
+import pytest
 
 from app.ingest import extract_author_affiliations
+
+# The base-14 "helv" font PyMuPDF writes by default is Latin-1 only, so a fixture
+# containing "ł" or "ø" comes back out of the text extractor as "·" — an artefact
+# of the test rig, not of any real PDF. Embed a Unicode TTF so author names in
+# fixtures survive the round trip and read the way publisher PDFs actually do.
+_UNICODE_FONT = next(
+    (
+        path
+        for path in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        )
+        if os.path.exists(path)
+    ),
+    None,
+)
+# Tests whose author names go beyond Latin-1 can only run with such a font.
+needs_unicode_font = pytest.mark.skipif(
+    _UNICODE_FONT is None, reason="no Unicode TTF on this system to embed in fixtures"
+)
 
 
 def _make_pdf(text: str) -> bytes:
     doc = fitz.open()
     page = doc.new_page()
-    page.insert_text((72, 72), text)
+    if _UNICODE_FONT is None:
+        page.insert_text((72, 72), text)
+    else:
+        page.insert_text((72, 72), text, fontname="uni", fontfile=_UNICODE_FONT)
     return doc.tobytes()
 
 
@@ -122,6 +150,7 @@ def test_title_wording_is_not_mistaken_for_an_affiliation() -> None:
     assert not any("Integrated framework" in a for a in affs)
 
 
+@needs_unicode_font
 def test_separate_marker_lines_map_each_author_to_the_right_affiliation() -> None:
     """Elsevier PDFs can extract superscripts as standalone lines."""
     pdf = _make_pdf(
@@ -144,6 +173,70 @@ def test_separate_marker_lines_map_each_author_to_the_right_affiliation() -> Non
     assert affs[2] == "Warsaw University of Technology (WUT), Warsaw, Poland"
     assert "NCBJ" in affs[3]
     assert not any("Impact of equipment" in affiliation for affiliation in affs)
+
+
+def test_detached_accent_in_header_still_matches_the_crossref_name() -> None:
+    """Regression: Elsevier renders "Prusiński" as "Prusi´nski" — a spacing acute
+    plus a bare "n" — while Crossref stores the precomposed form. A literal
+    substring search finds no markers, so the author was left with no affiliation
+    at all while his ASCII-named co-author mapped fine."""
+    pdf = _make_pdf(
+        "Thermal characteristics of developing flow in an annular pipe\n"
+        "Piotr Prusi´nski a,*, Sławomir Kubacki b\n"
+        "a National Centre for Nuclear Research, Andrzeja Soltana 7, Otwock, Poland\n"
+        "b Warsaw University of Technology, Institute of Aeronautics, Warsaw, Poland\n"
+        "A B S T R A C T\nBody."
+    )
+
+    affs = extract_author_affiliations(pdf, ["Piotr Prusiński", "Sławomir Kubacki"])
+
+    assert affs[0] is not None and "National Centre for Nuclear Research" in affs[0]
+    assert "Warsaw University" not in affs[0]
+    assert affs[1] is not None and "Warsaw University of Technology" in affs[1]
+
+
+@needs_unicode_font
+def test_precomposed_accents_and_non_decomposing_letters_still_match() -> None:
+    """The fold must not break names that already agree between PDF and Crossref.
+    Both surnames carry a letter NFKD leaves untouched — "ś" decomposes, "ø" does
+    not — so each exercises a different branch of the fold."""
+    pdf = _make_pdf(
+        "A Paper Title\n"
+        "Anna Wiśniewska a, Lars Sørensen b\n"
+        "a National Centre for Nuclear Research, Otwock, Poland\n"
+        "b Institute for Energy Technology, Kjeller, Norway\n"
+        "Abstract\nBody."
+    )
+
+    affs = extract_author_affiliations(pdf, ["Anna Wiśniewska", "Lars Sørensen"])
+
+    assert affs[0] is not None and "National Centre" in affs[0]
+    assert "Institute for Energy" not in affs[0]
+    assert affs[1] is not None and "Institute for Energy Technology" in affs[1]
+
+
+@needs_unicode_font
+def test_ascii_stripped_surname_in_header_matches_the_accented_crossref_name() -> None:
+    """Some publishers set the header with diacritics stripped entirely while
+    Crossref keeps them. "ś" folds via NFKD, "ø" only via the explicit letter
+    table — without both, these authors get no affiliation."""
+    pdf = _make_pdf(
+        "A Paper Title\n"
+        "Anna Wisniewska a, Lars Sorensen b\n"
+        "a National Centre for Nuclear Research, Otwock, Poland\n"
+        "b Institute for Energy Technology, Kjeller, Norway\n"
+        "Abstract\nBody."
+    )
+
+    affs = extract_author_affiliations(pdf, ["Anna Wiśniewska", "Lars Sørensen"])
+
+    # The negative halves carry this test: with no name match at all, the parser
+    # falls back to sharing every affiliation with everyone, which would satisfy
+    # the positive assertions on its own.
+    assert affs[0] is not None and "National Centre" in affs[0]
+    assert "Institute for Energy" not in affs[0]
+    assert affs[1] is not None and "Institute for Energy Technology" in affs[1]
+    assert "National Centre" not in affs[1]
 
 
 def test_centre_and_center_still_match_as_institutions() -> None:
