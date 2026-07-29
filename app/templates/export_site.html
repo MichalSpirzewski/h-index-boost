@@ -1,3 +1,4 @@
+{% import "_export.html" as export %}
 {#- Selected-publications summary, used by both downloaded summary.html files and
     persistent RefBase share links.
 
@@ -104,7 +105,8 @@
 <h1>Selected publications</h1>
 <p class="sort">
   {{ "A shared selection of" if hosted else "A snapshot of" }} {{ rows | length }} paper{{ "" if rows | length == 1 else "s" }}. Click a column header to sort,
-  an author or keyword to filter, a title to expand it.
+  an author or keyword to filter, a title to expand it.{% if hosted %}
+  Select papers below to download files or create another share link.{% endif %}
 </p>
 <p class="filter-bar" id="js-filter-bar" hidden>
   <span id="js-filter-label"></span>
@@ -112,9 +114,14 @@
 </p>
 
 {% macro article_table(table_rows) %}
+{% if hosted %}
+{{ export.export_form_open() }}
+{{ export.export_bar() }}
+{% endif %}
 <div class="js-offline-table">
   <table class="wide-table offline-table" data-sort="published" data-order="desc">
     <colgroup>
+      {% if hosted %}<col class="article-col-select">{% endif %}
       <col class="article-col-title">
       <col class="article-col-authors">
       <col class="article-col-published">
@@ -126,6 +133,7 @@
     </colgroup>
     <thead>
       <tr>
+        {% if hosted %}{{ export.select_th() }}{% endif %}
         {% for key, label in [("title", "Title"), ("author", "Authors"), ("published", "Published"),
                               ("online", "Online"), ("journal", "Journal"), ("status", "Status")] %}
         <th class="sortable{% if key == 'published' %} active{% endif %}" data-sort-key="{{ key }}">
@@ -152,6 +160,7 @@
           data-sort-online="{{ article.online_date or '' }}"
           data-sort-journal="{{ (article.journal or '') | lower }}"
           data-sort-status="{{ article.status }}">
+        {% if hosted %}{{ export.select_td(article) }}{% endif %}
         <td class="article-title-cell">
           <a href="#" class="js-detail-toggle">{{ article.title or article.doi or "(untitled)" }}</a>
           {% if article.topics %}
@@ -197,7 +206,7 @@
       </tr>
       {#- The detail row travels with its article row when the table is sorted. -#}
       <tr class="detail-row" hidden>
-        <td colspan="8">
+        <td colspan="{{ 9 if hosted else 8 }}">
           <div class="row-detail">
             <div class="detail-metadata">
               <p class="detail-authors">
@@ -243,6 +252,9 @@
   </table>
   <p class="no-matches" hidden>No paper in this table matches the current filter.</p>
 </div>
+{% if hosted %}
+{{ export.export_form_close() }}
+{% endif %}
 {% endmacro %}
 
 {% if rows %}
@@ -278,6 +290,9 @@
 </main>
 <script>
 {{ offline_js | safe }}
+{% if hosted %}
+{{ export_js | safe }}
+{% endif %}
 </script>
 </body>
 </html>

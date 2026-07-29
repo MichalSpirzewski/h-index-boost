@@ -85,6 +85,19 @@ def test_shared_page_shows_only_selected_papers_with_summary_features(client) ->
     assert "<summary>BibTeX</summary>" in page
     assert 'id="js-copy-share"' in page
     assert f'value="{created["url"]}"' in page
+    assert 'class="js-export-form"' in page
+    assert page.count('class="js-row-check"') == 2
+    for action in (
+        "/export/bibtex",
+        "/export/word-xml",
+        "/export/pdfs",
+        "/export/all",
+        "/export/site",
+        "/shares",
+    ):
+        assert f'formaction="{action}"' in page
+    assert "Create share link" in page
+    assert "Copy BibTeX" in page
     assert "summary.html" not in page
     assert "In this folder" not in page
 

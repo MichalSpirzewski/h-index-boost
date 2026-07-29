@@ -68,6 +68,13 @@
         pair.row.hidden = !show;
         if (!show) {
           pair.detail.hidden = true;
+          // Hosted share pages add the normal selection toolbar. A filtered-out
+          // paper should not remain invisibly selected for a later download.
+          var check = pair.row.querySelector(".js-row-check");
+          if (check && check.checked) {
+            check.checked = false;
+            check.dispatchEvent(new Event("change", { bubbles: true }));
+          }
         } else {
           visible++;
         }

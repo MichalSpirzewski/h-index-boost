@@ -137,6 +137,7 @@ def _render_summary(
         style_css=(_STATIC_DIR / "style.css").read_text(encoding="utf-8"),
         offline_css=(_STATIC_DIR / "offline.css").read_text(encoding="utf-8"),
         offline_js=(_STATIC_DIR / "offline.js").read_text(encoding="utf-8"),
+        export_js=(_STATIC_DIR / "export.js").read_text(encoding="utf-8"),
         generated=generated,
         hosted=hosted,
         share_url=share_url,
