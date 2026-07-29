@@ -396,6 +396,25 @@ def test_dashboard_panels_are_collapsed_by_default(client, monkeypatch, crossref
         assert page.rindex("<details", 0, summary) == page.rindex("<details>", 0, summary)
 
 
+def test_dashboard_paper_has_foldable_abstract_beside_topics(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_with_authors(
+        client, monkeypatch, crossref_message, "10.9999/abstract-preview", ["Adams"]
+    )
+
+    page = client.get("/").text
+    row_start = page.index('class="article-title-cell"')
+    row = page[row_start:page.index("</td>", row_start)]
+
+    assert 'class="article-preview"' in row
+    assert 'class="chips"' in row
+    assert 'class="article-abstract"' in row
+    assert '<summary class="btn">Abstract</summary>' in row
+    assert "Quantum measurement &amp; its 100% weird consequences." in row
+    assert "<details open" not in row
+
+
 def test_topic_panel_opens_when_a_topic_filter_is_active(
     client, monkeypatch, crossref_message
 ) -> None:
@@ -420,6 +439,7 @@ def test_dashboard_and_author_page_offer_multi_select_export(
         assert 'formaction="/export/word-xml"' in page.text
         assert 'formaction="/export/pdfs"' in page.text
         assert 'formaction="/export/all"' in page.text
+        assert 'formaction="/shares"' in page.text
         assert 'name="ids"' in page.text
 
 

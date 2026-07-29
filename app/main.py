@@ -1,6 +1,5 @@
 import io
-import re
-import unicodedata
+import secrets
 import zipfile
 from pathlib import Path
 
@@ -16,30 +15,27 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app import bibtex, contacts, db, ingest, word_xml
-from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
+from app import bibtex, contacts, db, ingest, site_export, word_xml
+from app.affiliations import NCNR_LABEL, NCNR_PHRASE, canonical_affiliation
+from app.models import (
+    Article,
+    ArticleAuthor,
+    ArticleTopic,
+    Author,
+    SharedSelection,
+    SharedSelectionArticle,
+    Topic,
+)
+from app.templating import templates
 
 app = FastAPI(title="RefBase")
 
 _BASE_DIR = Path(__file__).parent
-templates = Jinja2Templates(directory=_BASE_DIR / "templates")
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
-
-
-def _short_author_name(full_name: str) -> str:
-    """'Michał Spirzewski' -> 'M. Spirzewski'; single-token names unchanged."""
-    parts = full_name.split()
-    if len(parts) < 2:
-        return full_name
-    return f"{parts[0][0]}. {parts[-1]}"
-
-
-templates.env.filters["short_name"] = _short_author_name
 
 
 @app.on_event("startup")
@@ -67,27 +63,6 @@ def _startup() -> None:
         # Crossref occasionally supplies HTML entities in container titles. Keep
         # journal links and page identifiers human-readable for old and new rows.
         ingest.backfill_journal_names(session)
-
-
-def _affiliation_key(text: str) -> str:
-    """Normalize an affiliation for de-dup: strip case, diacritics, and punctuation."""
-    decomposed = unicodedata.normalize("NFKD", text)
-    ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9]+", " ", ascii_only.lower()).strip()
-
-
-# Any affiliation mentioning NCNR is folded into this single canonical entry,
-# regardless of the street address / spelling variants across PDFs.
-_NCNR_PHRASE = "national centre for nuclear research"
-_NCNR_LABEL = "National Centre for Nuclear Research"
-
-
-def _canonical_affiliation(text: str) -> tuple[str, str]:
-    """Return a (dedup-key, display-text) pair, grouping NCNR variants into one."""
-    key = _affiliation_key(text)
-    if _NCNR_PHRASE in key:
-        return _NCNR_PHRASE, _NCNR_LABEL
-    return key, text
 
 
 def _clean(value: str | None) -> str | None:
@@ -353,7 +328,7 @@ def index(
         for row in session.execute(
             select(ArticleAuthor.author_id)
             .distinct()
-            .where(ArticleAuthor.affiliation.ilike(f"%{_NCNR_LABEL}%"))
+            .where(ArticleAuthor.affiliation.ilike(f"%{NCNR_LABEL}%"))
         )
     }
     ncnr_authors = [pair for pair in author_stats if pair[0].id in ncnr_ids]
@@ -393,7 +368,7 @@ def index(
             "ncnr_authors": ncnr_authors,
             "other_authors": other_authors,
             "meeting_links": meeting_links,
-            "ncnr_label": _NCNR_LABEL,
+            "ncnr_label": NCNR_LABEL,
             "topic_stats": topic_stats,
             "active_topic": active_topic,
         },
@@ -547,9 +522,9 @@ def author_detail(
                 for aff in link.affiliation.split("; "):
                     aff = aff.strip()
                     if aff:
-                        key, display = _canonical_affiliation(aff)
+                        key, display = canonical_affiliation(aff)
                         affiliations.setdefault(key, display)
-                        if key == _NCNR_PHRASE:
+                        if key == NCNR_PHRASE:
                             is_ncbj = True
         for art_topic in article.topics:
             topics[art_topic.id] = art_topic
@@ -836,6 +811,86 @@ def _articles_for_export(session: Session, ids: list[int]) -> list[Article]:
     return articles
 
 
+def _share_token(session: Session) -> str:
+    """Create a URL-safe bearer token that does not expose the selected IDs."""
+    while True:
+        token = secrets.token_urlsafe(24)
+        if session.get(SharedSelection, token) is None:
+            return token
+
+
+@app.post("/shares", status_code=201, name="create_shared_selection")
+def create_shared_selection(
+    request: Request,
+    ids: list[int] = Form(default=[]),
+    session: Session = Depends(db.get_db),
+):
+    """Persist an ordered paper selection and return its shareable RefBase URL."""
+    if not ids:
+        return _empty_selection(request)
+    articles = _articles_for_export(session, ids)
+    selection = SharedSelection(
+        token=_share_token(session),
+        article_links=[
+            SharedSelectionArticle(article_id=article.id, position=position)
+            for position, article in enumerate(articles)
+        ],
+    )
+    session.add(selection)
+    session.commit()
+
+    share_url = request.url_for("shared_selection_page", token=selection.token)
+    if _wants_html(request):
+        return RedirectResponse(f"{share_url}?created=1", status_code=303)
+    return {
+        "token": selection.token,
+        "url": str(share_url),
+        "article_count": len(articles),
+    }
+
+
+@app.get("/shares/{token}", name="shared_selection_page")
+def shared_selection_page(
+    request: Request,
+    token: str,
+    created: int = 0,
+    session: Session = Depends(db.get_db),
+):
+    """Show the current RefBase metadata for one persistent shared selection."""
+    selection = session.get(SharedSelection, token)
+    if selection is None:
+        raise HTTPException(status_code=404, detail="Shared selection not found")
+
+    articles = list(
+        session.scalars(
+            select(Article)
+            .join(
+                SharedSelectionArticle,
+                SharedSelectionArticle.article_id == Article.id,
+            )
+            .where(
+                SharedSelectionArticle.selection_token == token,
+                Article.hidden.is_(False),
+            )
+            .order_by(SharedSelectionArticle.position)
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+                selectinload(Article.topics),
+            )
+        )
+    )
+    share_url = str(request.url_for("shared_selection_page", token=token))
+    return Response(
+        site_export.render_shared_page(
+            articles,
+            share_url=share_url,
+            created_at=selection.created_at,
+            link_created=created == 1,
+        ),
+        media_type="text/html",
+    )
+
+
 @app.post("/export/bibtex", response_class=PlainTextResponse)
 def export_bibtex(
     request: Request,
@@ -948,6 +1003,25 @@ def export_all_formats(
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-all.zip"'
+        },
+    )
+
+
+@app.post("/export/site")
+def export_site(
+    request: Request,
+    ids: list[int] = Form(default=[]),
+    session: Session = Depends(db.get_db),
+):
+    """Download the selection as a browsable offline copy of this page + its PDFs."""
+    if not ids:
+        return _empty_selection(request)
+    articles = _articles_for_export(session, ids)
+    return Response(
+        site_export.build_archive(articles),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="refbase-{len(articles)}-page.zip"'
         },
     )
 

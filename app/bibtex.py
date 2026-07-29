@@ -101,20 +101,33 @@ def _render(key: str, entry_type: str, fields: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def export_bibtex(articles: list[Article]) -> str:
-    """Render articles as one .bib document, deduplicating cite keys with a/b/c suffixes."""
+def unique_key(base_key: str, used: set[str]) -> str:
+    """Add an a/b/c suffix until the key is free, then claim it in `used`."""
+    key = base_key
+    suffix = 0
+    while key in used:
+        key = base_key + chr(ord("a") + suffix)
+        suffix += 1
+    used.add(key)
+    return key
+
+
+def export_entries(articles: list[Article]) -> list[tuple[str, str]]:
+    """One (cite key, rendered entry) pair per article, keys deduplicated across the
+    whole list. Keeping entries separate also gives summary exports a stable cite
+    key for each displayed BibTeX block and PDF filename."""
     used: set[str] = set()
     entries = []
     for article in articles:
         base_key, entry_type, fields = _prepare(article)
-        key = base_key
-        suffix = 0
-        while key in used:
-            key = base_key + chr(ord("a") + suffix)
-            suffix += 1
-        used.add(key)
-        entries.append(_render(key, entry_type, fields))
-    return "\n\n".join(entries) + "\n"
+        key = unique_key(base_key, used)
+        entries.append((key, _render(key, entry_type, fields)))
+    return entries
+
+
+def export_bibtex(articles: list[Article]) -> str:
+    """Render articles as one .bib document, deduplicating cite keys with a/b/c suffixes."""
+    return "\n\n".join(entry for _key, entry in export_entries(articles)) + "\n"
 
 
 def article_bibtex(article: Article) -> str:

@@ -81,6 +81,9 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 - `GET /articles` — paginated table (50/page), filters: topic, author, year, full-text query. Row actions: view, download PDF, download BibTeX, select-checkbox.
 - `POST /export/bibtex` — selected article ids → single merged `.bib` download. Also `GET /articles/{id}/bibtex` for one.
 - `POST /export/word-xml` — same selection → single `.xml` for Microsoft Word's Source Manager. Also `GET /articles/{id}/word-xml` for one.
+- `POST /export/site` — same selection → a ZIP holding a self-contained `summary.html` (a copy of the dashboard limited to the selection) and the available selected PDFs, all at the ZIP root. Built in `site_export.py`. CSS and JavaScript are embedded in the HTML, which supports offline sorting, filtering, and expandable paper details. BibTeX is shown in a foldable detail section; no standalone `.bib` or `.xml` is included.
+- `POST /shares` — persist the ordered selected article ids under an opaque bearer token; browser forms redirect to the new page and JSON clients receive its absolute URL.
+- `GET /shares/{token}` — a live RefBase-hosted version of the selected-publications summary. It shows only currently visible papers from that selection and supports copying the persistent link, sorting, filtering, expandable details, server PDF links, and foldable BibTeX. Anyone with the unguessable link can view it; there is no separate share authentication.
 - `GET /articles/{id}` — detail: metadata, authors, topics, abstract, PDF download, "added by".
 - `GET /authors/{id}` — author's articles, co-authors, topics.
 - `GET /topics/{id}` — articles + most active authors in the topic.
@@ -109,6 +112,9 @@ Word export: many people in the group write in Microsoft Word, not LaTeX. Word h
     ingest.py          # pipeline (DOI extraction, Crossref, S2, Unpaywall)
     bibtex.py          # JSON → BibTeX
     word_xml.py        # JSON → Word Source Manager XML
+    site_export.py     # selection → self-contained offline page + PDFs (ZIP)
+    templating.py      # Jinja env shared by main.py and site_export.py
+    affiliations.py    # affiliation normalisation / NCNR grouping
     templates/         # Jinja2 + HTMX partials
     static/
   data/                # sqlite file + pdfs/ (gitignored)

@@ -1,0 +1,89 @@
+/* Extras for the exported offline page. Loaded after style.css, which the export
+   copies verbatim so the page keeps the dashboard's look. */
+
+.offline-note { color: #6b7785; font-size: 0.85rem; }
+
+/* Rows are hidden by the filter; a <tr>'s display rule would otherwise win. */
+tr[hidden] { display: none; }
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #e8f1fb;
+  border: 1px solid #9dc0e8;
+  border-radius: 4px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+}
+.filter-bar[hidden] { display: none; }
+.filter-bar .btn { margin-right: 0; }
+
+.no-matches { color: #6b7785; padding: 0.75rem 0.25rem; }
+.no-matches[hidden] { display: none; }
+
+/* Titles, authors and journals are filter triggers rather than links to pages
+   that do not exist offline — but they should still read as clickable. */
+.article-title-cell a,
+.js-author-filter,
+.js-journal-filter { cursor: pointer; }
+.article-title-cell a { color: #1a4d8f; text-decoration: none; }
+.article-title-cell a:hover { text-decoration: underline; }
+
+/* The expandable stand-in for the article detail page. */
+.detail-row > td { background: #f8fafc; }
+.row-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  padding: 0.75rem 0.25rem 1rem;
+}
+.row-detail h3 { margin: 0.9rem 0 0.3rem; font-size: 0.95rem; }
+.detail-content > h3:first-child { margin-top: 0; }
+.row-detail dl { margin: 0.5rem 0; }
+.row-detail dt { font-weight: 600; font-size: 0.85rem; color: #556; }
+.row-detail dd { margin: 0 0 0.35rem; }
+.detail-authors { margin: 0 0 0.5rem; }
+.detail-text { margin: 0; max-width: 60rem; }
+.detail-highlights { margin: 0; padding-left: 1.2rem; }
+.detail-bibtex-fold { margin-top: 1rem; }
+.detail-bibtex-fold > summary {
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.detail-bibtex {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.6rem 0.75rem;
+  margin: 0;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+@media (max-width: 48rem) {
+  .row-detail { grid-template-columns: 1fr; }
+}
+
+.bundle-list { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+.bundle-list li { padding: 0.15rem 0; }
+
+.share-link-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+.share-link-row input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+}
+.share-link-row .btn { flex: 0 0 auto; margin-right: 0; }
+.share-panel .saved-note {
+  min-height: 1.3em;
+  margin: 0.35rem 0 0;
+  color: #1c6b3a;
+  font-size: 0.85rem;
+}

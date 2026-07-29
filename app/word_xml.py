@@ -12,7 +12,7 @@ import json
 import re
 from xml.etree import ElementTree as ET
 
-from app.bibtex import make_cite_key
+from app.bibtex import make_cite_key, unique_key
 from app.models import Article
 
 NS = "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"
@@ -111,6 +111,42 @@ def _append_source(
         ET.SubElement(source, f"{{{NS}}}{name}").text = str(value)
 
 
+# A document is a header, the <b:Source> elements, and a footer. The offline export
+# page glues the same three pieces together in JavaScript for whatever subset the
+# reader ticks, so both sides have to agree on them.
+DOC_OPEN = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+    f'<b:Sources xmlns:b="{NS}" SelectedStyle="">\n'
+)
+DOC_CLOSE = "\n</b:Sources>"
+
+# ElementTree repeats the namespace declaration on every element it serialises on
+# its own; the wrapper above already carries it, so drop it from the fragments.
+_NS_DECL = re.compile(r'\s+xmlns:b="[^"]*"')
+
+
+def export_sources(articles: list[Article]) -> list[tuple[str, str]]:
+    """One (tag, serialized <b:Source> element) pair per article, tags deduplicated
+    across the whole list exactly as the BibTeX export deduplicates cite keys.
+
+    The fragments declare no namespace of their own — they are meant to be joined
+    between `DOC_OPEN` and `DOC_CLOSE`.
+    """
+    ET.register_namespace("b", NS)
+    used: set[str] = set()
+    fragments = []
+    for article in articles:
+        base_tag, fields, names = _fields(article)
+        tag = unique_key(base_tag, used)
+        holder = ET.Element(f"{{{NS}}}Sources")
+        _append_source(holder, tag, fields, names)
+        source = holder[0]
+        ET.indent(source)  # indent the fragment itself, so it closes at column 0
+        text = ET.tostring(source, encoding="unicode").strip()
+        fragments.append((tag, _NS_DECL.sub("", text, count=1)))
+    return fragments
+
+
 def export_word_xml(articles: list[Article]) -> str:
     """Render articles as one Word Source Manager document, deduplicating tags with
     a/b/c suffixes exactly as the BibTeX export deduplicates cite keys."""
@@ -119,13 +155,7 @@ def export_word_xml(articles: list[Article]) -> str:
     used: set[str] = set()
     for article in articles:
         base_tag, fields, names = _fields(article)
-        tag = base_tag
-        suffix = 0
-        while tag in used:
-            tag = base_tag + chr(ord("a") + suffix)
-            suffix += 1
-        used.add(tag)
-        _append_source(root, tag, fields, names)
+        _append_source(root, unique_key(base_tag, used), fields, names)
     ET.indent(root)
     return '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n' + ET.tostring(
         root, encoding="unicode"

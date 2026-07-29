@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -42,7 +42,7 @@ class Article(Base):
     # or a series of related papers) so co-authors know which version to reference.
     cite_first: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime, default=lambda: datetime.now(UTC)
     )
 
     author_links: Mapped[list[ArticleAuthor]] = relationship(
@@ -107,3 +107,41 @@ class ArticleTopic(Base):
 
     article_id: Mapped[int] = mapped_column(ForeignKey("articles.id"), primary_key=True)
     topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), primary_key=True)
+
+
+class SharedSelection(Base):
+    """A persistent, unguessable link to an ordered selection of papers."""
+
+    __tablename__ = "shared_selections"
+
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+
+    article_links: Mapped[list[SharedSelectionArticle]] = relationship(
+        back_populates="selection",
+        order_by="SharedSelectionArticle.position",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class SharedSelectionArticle(Base):
+    """One paper in a shared selection, retaining the creator's display order."""
+
+    __tablename__ = "shared_selection_articles"
+    __table_args__ = (
+        UniqueConstraint("selection_token", "position", name="uq_shared_selection_position"),
+    )
+
+    selection_token: Mapped[str] = mapped_column(
+        ForeignKey("shared_selections.token", ondelete="CASCADE"), primary_key=True
+    )
+    article_id: Mapped[int] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    selection: Mapped[SharedSelection] = relationship(back_populates="article_links")
+    article: Mapped[Article] = relationship()

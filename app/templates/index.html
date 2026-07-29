@@ -132,10 +132,20 @@
       {{ export.select_td(article) }}
       <td class="article-title-cell">
         <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
-        {% if article.topics %}
-        <div class="chips">
-          {% for topic in article.topics[:5] %}<span class="chip">{{ topic.name }}</span>{% endfor %}
-          {% if article.topics | length > 5 %}<span class="chip">+{{ article.topics | length - 5 }}</span>{% endif %}
+        {% if article.topics or article.abstract %}
+        <div class="article-preview">
+          {% if article.topics %}
+          <div class="chips">
+            {% for topic in article.topics[:5] %}<span class="chip">{{ topic.name }}</span>{% endfor %}
+            {% if article.topics | length > 5 %}<span class="chip">+{{ article.topics | length - 5 }}</span>{% endif %}
+          </div>
+          {% endif %}
+          {% if article.abstract %}
+          <details class="article-abstract">
+            <summary class="btn">Abstract</summary>
+            <p>{{ article.abstract }}</p>
+          </details>
+          {% endif %}
         </div>
         {% endif %}
       </td>

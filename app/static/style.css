@@ -105,6 +105,33 @@ button { padding: 0.5rem 1rem; }
   margin: 0 0.25rem 0.15rem 0;
   white-space: nowrap;
 }
+/* Per-paper previews on the main dashboard. The native <details> control works
+   without JavaScript: closed it sits beside the keyword chips, and when opened
+   its abstract takes a full line below them. */
+.article-preview {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+  margin-top: 0.2rem;
+}
+.article-preview > .chips { margin-top: 0; }
+.article-abstract { display: inline-block; }
+.article-abstract > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.article-abstract > summary::-webkit-details-marker { display: none; }
+.article-abstract > summary.btn { margin: 0 0 0.15rem; }
+.article-abstract[open] { flex: 1 0 100%; }
+.article-abstract > p {
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0.65rem;
+  border-left: 3px solid #9dc0e8;
+  background: #f8fafc;
+  color: #445;
+  font-size: 0.88rem;
+}
 /* Unique-authors panel */
 .dashboard-panels {
   display: grid;
@@ -410,6 +437,24 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
   opacity: 0.5;
   cursor: not-allowed;
   background: #f2f4f7;
+}
+.export-bar .share-result {
+  display: flex;
+  align-items: center;
+  flex: 1 0 100%;
+  gap: 0.4rem;
+}
+.export-bar .share-result[hidden] { display: none; }
+.export-bar .share-result input {
+  box-sizing: border-box;
+  flex: 1 1 24rem;
+  min-width: 10rem;
+  padding: 0.3rem 0.5rem;
+}
+.export-bar .share-result .btn { flex: 0 0 auto; margin-right: 0; }
+.export-bar .js-share-status {
+  color: #1c6b3a;
+  font-size: 0.85rem;
 }
 .select-col { width: 1%; white-space: nowrap; text-align: center; }
 /* Visually hidden but still read by screen readers. */

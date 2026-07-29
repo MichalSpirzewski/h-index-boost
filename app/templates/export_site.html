@@ -1,0 +1,283 @@
+{#- Selected-publications summary, used by both downloaded summary.html files and
+    persistent RefBase share links.
+
+    The downloaded version opens from the filesystem, so every action happens in
+    the browser. Deliberately not extending base.html: all assets are embedded so
+    the same rendering stays self-contained offline. -#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RefBase — {{ rows | length }} selected paper{{ "" if rows | length == 1 else "s" }}</title>
+  <style>
+{{ style_css | safe }}
+{{ offline_css | safe }}
+  </style>
+</head>
+<body>
+<nav>
+  <a href="{{ '/' if hosted else 'summary.html' }}"><strong>RefBase</strong></a>
+  <span class="offline-note">{{ "Shared selection" if hosted else "Offline copy" }} · {{ generated }}</span>
+  <div class="searchbox">
+    <input type="search" id="js-search" placeholder="Filter titles, authors, abstracts&hellip;"
+           autocomplete="off">
+  </div>
+</nav>
+<main>
+{% if hosted and link_created %}
+<div class="banner ok">Share link created. Copy the link below and send it to your recipients.</div>
+{% endif %}
+
+{% macro author_group(pairs) %}
+<ul class="author-list">
+  {% for author, pubs in pairs %}
+  <li>
+    <a href="#" class="js-author-filter" data-author="{{ author.id }}"
+       title="Show only papers by {{ author.full_name }}">{{ author.full_name | short_name }}</a>
+    <span class="pub-count" title="{{ pubs }} paper{{ '' if pubs == 1 else 's' }} in this selection">{{ pubs }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+
+<div class="dashboard-panels">
+  <div class="dashboard-panels-left">
+    {% if author_total %}
+    <section class="authors-panel">
+      <details>
+        <summary><span class="panel-title">Authors</span> <span class="count-badge">{{ author_total }}</span></summary>
+        <div class="author-groups">
+          {% if ncnr_authors %}
+          <h3 class="author-group-title">{{ ncnr_label }} <span class="count-badge subtle">{{ ncnr_authors | length }}</span></h3>
+          {{ author_group(ncnr_authors) }}
+          {% endif %}
+          {% if other_authors %}
+          <h3 class="author-group-title">Other affiliations <span class="count-badge subtle">{{ other_authors | length }}</span></h3>
+          {{ author_group(other_authors) }}
+          {% endif %}
+        </div>
+      </details>
+    </section>
+    {% endif %}
+    {% if topic_stats %}
+    <section class="authors-panel topics-panel">
+      <details>
+        <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
+        <div class="chips">
+          {% for topic, count in topic_stats %}
+          <a class="chip chip-link js-topic-filter" href="#" data-topic="{{ topic.id }}"
+             title="{{ count }} paper{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+          {% endfor %}
+        </div>
+      </details>
+    </section>
+    {% endif %}
+  </div>
+  {% if hosted %}
+  <section class="authors-panel bundle-panel share-panel">
+    <details open>
+      <summary><span class="panel-title">Share this selection</span> <span class="count-badge">{{ rows | length }}</span></summary>
+      <p class="empty-panel">Anyone with this link can view these papers in RefBase.</p>
+      <div class="share-link-row">
+        <input type="text" id="js-share-url" value="{{ share_url }}" readonly
+               aria-label="Share link">
+        <button type="button" class="btn" id="js-copy-share">Copy link</button>
+      </div>
+      <p class="saved-note" id="js-share-status" aria-live="polite"></p>
+    </details>
+  </section>
+  {% else %}
+  <section class="authors-panel bundle-panel">
+    <details>
+      <summary><span class="panel-title">In this folder</span> <span class="count-badge">{{ rows | selectattr("pdf") | list | length }}</span></summary>
+      <ul class="bundle-list">
+        <li><strong>summary.html</strong> <span class="subtle">— this publication summary</span></li>
+        <li><strong>{{ rows | selectattr("pdf") | list | length }} PDF file(s)</strong> <span class="subtle">— beside this page</span></li>
+      </ul>
+      <p class="empty-panel">Keep the files together so the PDF links continue to work.</p>
+    </details>
+  </section>
+  {% endif %}
+</div>
+
+<h1>Selected publications</h1>
+<p class="sort">
+  {{ "A shared selection of" if hosted else "A snapshot of" }} {{ rows | length }} paper{{ "" if rows | length == 1 else "s" }}. Click a column header to sort,
+  an author or keyword to filter, a title to expand it.
+</p>
+<p class="filter-bar" id="js-filter-bar" hidden>
+  <span id="js-filter-label"></span>
+  <a href="#" class="btn" id="js-filter-clear">Clear filter</a>
+</p>
+
+{% macro article_table(table_rows) %}
+<div class="js-offline-table">
+  <table class="wide-table offline-table" data-sort="published" data-order="desc">
+    <colgroup>
+      <col class="article-col-title">
+      <col class="article-col-authors">
+      <col class="article-col-published">
+      <col class="article-col-online">
+      <col class="article-col-journal">
+      <col class="article-col-status">
+      <col class="article-col-cite">
+      <col class="article-col-pdf">
+    </colgroup>
+    <thead>
+      <tr>
+        {% for key, label in [("title", "Title"), ("author", "Authors"), ("published", "Published"),
+                              ("online", "Online"), ("journal", "Journal"), ("status", "Status")] %}
+        <th class="sortable{% if key == 'published' %} active{% endif %}" data-sort-key="{{ key }}">
+          <a href="#">{{ label }}<span class="arrow">{% if key == "published" %}▼{% endif %}</span></a>
+        </th>
+        {% endfor %}
+        <th>Cite first</th>
+        <th>PDF</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in table_rows %}
+      {%- set article = row.article -%}
+      {%- set authors = article.authors -%}
+      <tr class="article-row{% if article.cite_first %} cite-first-row{% endif %}"
+          data-id="{{ article.id }}"
+          data-search="{{ row.search }}"
+          data-journal="{{ article.journal or '' }}"
+          data-authors=" {% for author in authors %}{{ author.id }} {% endfor %}"
+          data-topics=" {% for topic in article.topics %}{{ topic.id }} {% endfor %}"
+          data-sort-title="{{ (article.title or article.doi or '') | lower }}"
+          data-sort-author="{{ (authors[0].full_name.split() | last if authors and authors[0].full_name.split() else '') | lower }}"
+          data-sort-published="{{ article.published_date or article.year or '' }}"
+          data-sort-online="{{ article.online_date or '' }}"
+          data-sort-journal="{{ (article.journal or '') | lower }}"
+          data-sort-status="{{ article.status }}">
+        <td class="article-title-cell">
+          <a href="#" class="js-detail-toggle">{{ article.title or article.doi or "(untitled)" }}</a>
+          {% if article.topics %}
+          <div class="chips">
+            {% for topic in article.topics[:5] %}<span class="chip">{{ topic.name }}</span>{% endfor %}
+            {% if article.topics | length > 5 %}<span class="chip">+{{ article.topics | length - 5 }}</span>{% endif %}
+          </div>
+          {% endif %}
+        </td>
+        <td>
+          {%- for author in authors[:3] -%}
+            <a href="#" class="js-author-filter" data-author="{{ author.id }}"
+               title="{{ author.full_name }}">{{ author.full_name | short_name }}</a>{% if not loop.last %}, {% endif %}
+          {%- endfor -%}
+          {%- if authors | length > 3 %} et al.{% endif -%}
+        </td>
+        <td class="date-cell" title="Issue date as given by the publisher">{{ article.published_date or article.year or "" }}</td>
+        <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
+        <td>
+          {%- if article.journal -%}
+          <a href="#" class="js-journal-filter" data-journal="{{ article.journal }}">{{ article.journal }}</a>
+          {%- endif -%}
+        </td>
+        <td>
+          {%- set status_help = {
+            "ready": "Metadata fetched and the article is fully processed.",
+            "pending": "Metadata was still loading when this copy was exported.",
+            "metadata_failed": "Crossref lookup failed; only the PDF / basic info is available."
+          } -%}
+          <span class="status status-{{ article.status }}" title="{{ status_help.get(article.status, article.status) }}">{{ article.status }}</span>
+        </td>
+        <td class="cite-first-cell">
+          {%- if article.cite_first -%}
+          <span class="cite-first-btn cite-first-active" title="Flagged as the one to cite first">!</span>
+          {%- endif -%}
+        </td>
+        <td class="row-actions">
+          {% if row.pdf %}
+          <a class="btn" href="{{ row.pdf }}" target="_blank" rel="noopener">View</a>
+          <a class="btn" href="{{ row.pdf }}{% if hosted %}?download=1{% endif %}" download>Download</a>
+          {% endif %}
+        </td>
+      </tr>
+      {#- The detail row travels with its article row when the table is sorted. -#}
+      <tr class="detail-row" hidden>
+        <td colspan="8">
+          <div class="row-detail">
+            <div class="detail-metadata">
+              <p class="detail-authors">
+                {%- for author in authors -%}
+                  <span class="detail-author">{{ author.full_name }}{% if row.affiliations.get(author.id) %}
+                    <span class="subtle">({{ row.affiliations[author.id] | join("; ") }})</span>{% endif %}</span>{% if not loop.last %}, {% endif %}
+                {%- endfor -%}
+              </p>
+              <dl>
+                {% if article.journal %}<dt>Journal</dt><dd>{{ article.journal }}{% if article.year %} ({{ article.year }}){% endif %}</dd>{% endif %}
+                {% if article.published_date %}<dt>Published</dt><dd>{{ article.published_date }}{% if article.online_date and article.online_date != article.published_date %} <span class="subtle">(online {{ article.online_date }})</span>{% endif %}</dd>{% endif %}
+                {% if article.doi %}<dt>DOI</dt><dd><a href="https://doi.org/{{ article.doi }}" target="_blank" rel="noopener">{{ article.doi }}</a>{% if not hosted %} <span class="subtle">(needs a connection)</span>{% endif %}</dd>{% endif %}
+                {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+                {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
+                <dt>Cite key</dt><dd><code>{{ row.key }}</code></dd>
+              </dl>
+            </div>
+            <div class="detail-content">
+              {% if article.highlights %}
+              <h3>Highlights</h3>
+              <ul class="detail-highlights">
+                {% for line in article.highlights.splitlines() %}{% if line.strip() %}<li>{{ line }}</li>{% endif %}{% endfor %}
+              </ul>
+              {% endif %}
+              {% if article.citation_examples %}
+              <h3>Przykłady cytowania</h3>
+              <p class="detail-text">{{ article.citation_examples }}</p>
+              {% endif %}
+              {% if article.abstract %}
+              <h3>Abstract</h3>
+              <p class="detail-text">{{ article.abstract }}</p>
+              {% endif %}
+              <details class="detail-bibtex-fold">
+                <summary>BibTeX</summary>
+                <pre class="detail-bibtex">{{ row.bibtex }}</pre>
+              </details>
+            </div>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="no-matches" hidden>No paper in this table matches the current filter.</p>
+</div>
+{% endmacro %}
+
+{% if rows %}
+{% if cited_rows %}
+<section class="table-section cite-first-section">
+  <details open>
+    <summary>
+      <span class="panel-title">Research requested citing</span>
+      <span class="count-badge js-section-count">{{ cited_rows | length }}</span>
+    </summary>
+    {{ article_table(cited_rows) }}
+  </details>
+</section>
+{% endif %}
+<section class="table-section">
+  <details open>
+    <summary>
+      <span class="panel-title">All research</span>
+      <span class="count-badge js-section-count">{{ rows | length }}</span>
+    </summary>
+    {{ article_table(rows) }}
+  </details>
+</section>
+<p class="legend">
+  <strong>Status:</strong>
+  <span class="status status-ready">ready</span> fully processed ·
+  <span class="status status-pending">pending</span> metadata still loading ·
+  <span class="status status-metadata_failed">metadata_failed</span> Crossref lookup failed (PDF still available)
+</p>
+{% else %}
+<p>{{ "No papers in this shared selection are currently available." if hosted else "Nothing was selected for this export." }}</p>
+{% endif %}
+</main>
+<script>
+{{ offline_js | safe }}
+</script>
+</body>
+</html>

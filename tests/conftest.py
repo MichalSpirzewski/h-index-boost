@@ -24,11 +24,27 @@ def client(crossref_message, monkeypatch) -> TestClient:
     """TestClient on a clean database, with all external APIs mocked out."""
     from app import db, ingest
     from app.main import app
-    from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
+    from app.models import (
+        Article,
+        ArticleAuthor,
+        ArticleTopic,
+        Author,
+        SharedSelection,
+        SharedSelectionArticle,
+        Topic,
+    )
 
     db.init_db()
     with db.SessionLocal() as session:
-        for model in (ArticleAuthor, ArticleTopic, Article, Author, Topic):
+        for model in (
+            SharedSelectionArticle,
+            SharedSelection,
+            ArticleAuthor,
+            ArticleTopic,
+            Article,
+            Author,
+            Topic,
+        ):
             session.execute(delete(model))
         session.commit()
 

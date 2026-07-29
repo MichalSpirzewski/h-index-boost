@@ -1,11 +1,11 @@
 {#- Shared multi-select export UI, used by the dashboard and the author pages.
 
     Wrap a table in `export_form_open()` / `export_form_close()`, put `select_th()`
-    in its header row and `select_td(article)` in each body row. The two download
-    buttons are plain submits with `formaction`, so downloading works without JS;
-    export.js only adds the counter, select-all and clipboard copy. -#}
+    in its header row and `select_td(article)` in each body row. Download and share
+    actions are plain submits with `formaction`, so they work without JavaScript;
+    export.js adds counters, clipboard actions, and an inline share-link result. -#}
 
-{#- The action matters even though both download buttons carry `formaction`: with
+{#- The action matters even though the action buttons carry `formaction`: with
     nothing ticked they are disabled, so an implicit submit (Enter inside the form)
     has no submit button to take a formaction from and would fall back to the
     form's own action. Left empty that is the current page, which only serves GET
@@ -31,8 +31,19 @@
             title="ZIP containing all available PDFs from the selection" disabled>Download PDFs</button>
     <button type="submit" class="btn js-export-btn" formaction="/export/all"
             title="ZIP containing merged BibTeX, Word XML, and all available PDFs" disabled>Download everything</button>
+    <button type="submit" class="btn js-export-btn" formaction="/export/site"
+            title="ZIP containing summary.html and the available selected PDFs in one folder" disabled>Download summary</button>
+    <button type="submit" class="btn js-export-btn js-create-share" formaction="/shares"
+            title="Create a persistent RefBase link showing only the selected papers"
+            disabled>Create share link</button>
     <button type="button" class="btn js-export-btn js-copy-bibtex"
             title="Copy the merged BibTeX to the clipboard" disabled>Copy BibTeX</button>
+  </span>
+  <span class="share-result js-share-result" hidden>
+    <input type="text" class="js-share-url" readonly aria-label="Created share link">
+    <a class="btn js-open-share" href="#" target="_blank" rel="noopener">Open link</a>
+    <button type="button" class="btn js-copy-share">Copy link</button>
+    <span class="js-share-status" role="status" aria-live="polite"></span>
   </span>
 </div>
 {% endmacro %}
