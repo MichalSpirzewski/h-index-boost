@@ -12,6 +12,10 @@
   </th>
 {% endmacro %}
 {% block content %}
+<div class="page-actions">
+  <a class="btn" href="/projects/new">Create a project</a>
+  <a class="btn" href="/projects">Browse projects</a>
+</div>
 {% macro author_group(pairs) %}
 <ul class="author-list">
   {% for author, pubs in pairs %}

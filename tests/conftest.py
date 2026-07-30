@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -29,6 +29,8 @@ def client(crossref_message, monkeypatch) -> TestClient:
         ArticleAuthor,
         ArticleTopic,
         Author,
+        Project,
+        ProjectDocument,
         SharedSelection,
         SharedSelectionArticle,
         Topic,
@@ -36,7 +38,14 @@ def client(crossref_message, monkeypatch) -> TestClient:
 
     db.init_db()
     with db.SessionLocal() as session:
+        project_files = session.scalars(
+            select(ProjectDocument.file_path).where(
+                ProjectDocument.file_path.is_not(None)
+            )
+        ).all()
         for model in (
+            ProjectDocument,
+            Project,
             SharedSelectionArticle,
             SharedSelection,
             ArticleAuthor,
@@ -47,6 +56,8 @@ def client(crossref_message, monkeypatch) -> TestClient:
         ):
             session.execute(delete(model))
         session.commit()
+    for filename in project_files:
+        Path(filename).unlink(missing_ok=True)
 
     monkeypatch.setattr(ingest, "fetch_crossref", lambda doi: crossref_message)
     monkeypatch.setattr(ingest, "fetch_semantic_scholar", lambda doi: None)

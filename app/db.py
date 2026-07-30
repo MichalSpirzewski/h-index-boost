@@ -10,10 +10,12 @@ from app.models import Base
 
 DATA_DIR = Path(os.environ.get("REFBASE_DATA_DIR", "data"))
 PDF_DIR = DATA_DIR / "pdfs"
+PROJECT_DOCUMENT_DIR = DATA_DIR / "project_documents"
 DB_PATH = DATA_DIR / "refbase.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 PDF_DIR.mkdir(parents=True, exist_ok=True)
+PROJECT_DOCUMENT_DIR.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}
@@ -77,10 +79,24 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE articles ADD COLUMN citation_examples TEXT"))
         if article_cols and "highlights" not in article_cols:
             conn.execute(text("ALTER TABLE articles ADD COLUMN highlights TEXT"))
+        if article_cols and "publication_type" not in article_cols:
+            # All pre-hierarchy records came through the journal-paper workflow.
+            conn.execute(
+                text(
+                    "ALTER TABLE articles ADD COLUMN publication_type "
+                    "VARCHAR NOT NULL DEFAULT 'journal'"
+                )
+            )
 
         for column in ("published_date", "online_date"):
             if article_cols and column not in article_cols:
                 conn.execute(text(f"ALTER TABLE articles ADD COLUMN {column} VARCHAR"))
+        for column in ("conference_start_date", "conference_end_date"):
+            if article_cols and column not in article_cols:
+                conn.execute(text(f"ALTER TABLE articles ADD COLUMN {column} VARCHAR"))
+        for column in ("conference_name", "proceedings_title", "conference_location"):
+            if article_cols and column not in article_cols:
+                conn.execute(text(f"ALTER TABLE articles ADD COLUMN {column} TEXT"))
 
         author_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(authors)"))]
         if author_cols and "merged_into_id" not in author_cols:
@@ -89,6 +105,41 @@ def init_db() -> None:
         aa_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(article_authors)"))]
         if aa_cols and "affiliation" not in aa_cols:
             conn.execute(text("ALTER TABLE article_authors ADD COLUMN affiliation TEXT"))
+
+        project_doc_cols = [
+            row[1] for row in conn.execute(text("PRAGMA table_info(project_documents)"))
+        ]
+        for column, sql_type in (
+            ("local_project_id", "VARCHAR"),
+            ("lead_beneficiary", "TEXT"),
+            ("authors_json", "TEXT"),
+            ("published_date", "VARCHAR"),
+            ("pdf_text", "TEXT"),
+            ("parse_status", "VARCHAR NOT NULL DEFAULT 'not_parsed'"),
+            ("parse_warnings", "TEXT"),
+            ("original_filename", "TEXT"),
+            ("file_path", "TEXT"),
+            ("mime_type", "VARCHAR"),
+            ("byte_size", "INTEGER"),
+        ):
+            if project_doc_cols and column not in project_doc_cols:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE project_documents ADD COLUMN {column} {sql_type}"
+                    )
+                )
+
+        project_cols = [
+            row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))
+        ]
+        if project_cols and "project_number" not in project_cols:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN project_number VARCHAR"))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_projects_project_number "
+                "ON projects(project_number) WHERE project_number IS NOT NULL"
+            )
+        )
 
         fts_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(articles_fts)"))]
         rebuild = bool(fts_cols) and set(fts_cols) != set(_FTS_COLUMNS)

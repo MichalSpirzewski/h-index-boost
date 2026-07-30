@@ -2,6 +2,56 @@
 
 Self-hosted, no-login shared reference library for a research group. See [CLAUDE.md](CLAUDE.md) for full project scope and conventions.
 
+## Publication objects
+
+The original `Article` model is now exposed as a general `Publication` base
+class with `JournalPublication` and `ConferencePublication` subtypes. The
+hierarchy uses a `publication_type` discriminator in the existing `articles`
+table, so existing databases and URLs remain compatible. `Article` remains an
+import alias for `Publication`; new code should prefer the explicit names.
+
+Journal publications use the existing journal and publication-date metadata.
+Conference publications additionally support conference name, proceedings
+title, location, and start/end dates.
+
+## Project-document objects
+
+`ProjectDocument` is the base for non-publication files associated with a
+scientific project. Its initial subtypes are `DeliverableDocument` and
+`MilestoneDocument`. They keep the external project ID and stable entity code
+(for example `D2.1` or `MS3`) that will connect them to the project-management
+service.
+
+The browser UI provides local project workspaces at `/projects`. A project page
+keeps deliverables and milestones in separate lists and accepts project files
+through a click-to-select or drag-and-drop field. PDF, Word, Excel, PowerPoint,
+and text files up to 50 MB are stored separately from publication PDFs under
+`data/project_documents/`. Each logical document currently has one file;
+version-history objects will be added separately.
+
+Every local project has a unique project number. Uploaded PDFs are parsed for
+their project number, deliverable/milestone type and code, title, lead
+beneficiary, authors, and final-release date. When the parsed project number
+belongs to a different existing workspace, the document is automatically
+attributed to that project. Parsed PDF text is retained for future full-text
+search; incomplete extraction is surfaced as parsing notes on the project page.
+
+## Metadata API
+
+Versioned JSON endpoints are available under `/api/v1`:
+
+- `POST/GET /api/v1/publications`
+- `GET/PATCH /api/v1/publications/{id}`
+- `POST /api/v1/publications/{id}/archive`
+- `POST /api/v1/project-documents`
+- `GET/PATCH /api/v1/project-documents/{id}`
+- `POST /api/v1/project-documents/{id}/archive`
+- `GET /api/v1/projects/{external_project_id}/documents`
+
+FastAPI publishes the interactive OpenAPI documentation at `/docs`. The API is
+open for local development when `REFBASE_API_KEY` is unset. When it is set,
+clients must send the same value in the `X-API-Key` header.
+
 ## Running the app
 
 ```bash

@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select  # noqa: E402
 
 from app import db, ingest  # noqa: E402
-from app.models import Article  # noqa: E402
+from app.models import Article, JournalPublication  # noqa: E402
 
 
 def _doi_from_filename(pdf_path: Path) -> str | None:
@@ -54,7 +54,7 @@ def reingest(pdf_path: Path, force_refetch: bool) -> None:
         article = session.scalar(select(Article).where(Article.doi == doi))
         created = article is None
         if created:
-            article = Article(doi=doi, status="pending")
+            article = JournalPublication(doi=doi, status="pending")
             session.add(article)
             session.commit()
 

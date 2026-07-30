@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/projects">← All projects</a></p>
+<div class="title-row">
+  <div>
+    <h1>{{ project.acronym or project.name }}</h1>
+    {% if project.acronym %}<p class="project-full-name">{{ project.name }}</p>{% endif %}
+    <form class="project-number-form" action="/projects/{{ project.id }}/project-number" method="post">
+      <label for="project-number">Project number</label>
+      <input id="project-number" type="text" name="project_number"
+             value="{{ project_number_value or '' }}" required>
+      <button class="btn" type="submit">Update number</button>
+    </form>
+    {% if project.description %}<p>{{ project.description }}</p>{% endif %}
+  </div>
+  <a class="btn btn-primary" href="#add-project-document">Add document</a>
+</div>
+
+{% if project_number_updated %}<div class="banner ok">Project number updated.</div>{% endif %}
+{% if error %}<div class="banner warn">{{ error }}</div>{% endif %}
+
+{% macro document_table(documents, empty_message) %}
+  {% if documents %}
+  <table class="wide-table project-documents-table">
+    <colgroup>
+      <col class="project-document-col-code">
+      <col class="project-document-col-title">
+      <col class="project-document-col-authors">
+      <col class="project-document-col-released">
+      <col class="project-document-col-beneficiary">
+      <col class="project-document-col-file">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Code</th>
+        <th>Title</th>
+        <th>Authors</th>
+        <th>Released</th>
+        <th>Lead beneficiary</th>
+        <th>File</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for document in documents %}
+      <tr>
+        <td><span class="entity-code">{{ document.external_entity_key }}</span></td>
+        <td class="article-title-cell">
+          <a href="/project-documents/{{ document.id }}/file" target="_blank" rel="noopener">
+            {{ document.title or "(untitled)" }}
+          </a>
+          {% if document.description %}<div class="subtle">{{ document.description }}</div>{% endif %}
+          {% if document.parsing_warnings %}
+          <details class="parse-warnings">
+            <summary>Parsing notes ({{ document.parsing_warnings | length }})</summary>
+            <ul>{% for warning in document.parsing_warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+          </details>
+          {% endif %}
+        </td>
+        <td class="project-document-authors">
+          {%- set authors = document.project_authors -%}
+          {%- for author in authors[:3] -%}
+            {{ author }}{% if not loop.last %}, {% endif %}
+          {%- endfor -%}
+          {%- if authors | length > 3 %} et al.{% endif -%}
+        </td>
+        <td class="date-cell">{{ document.published_date or "" }}</td>
+        <td>{{ document.lead_beneficiary or "" }}</td>
+        <td class="row-actions">
+          <a class="btn" href="/project-documents/{{ document.id }}/file" target="_blank" rel="noopener">View</a>
+          <a class="btn" href="/project-documents/{{ document.id }}/file?download=1">Download</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-panel">{{ empty_message }}</p>
+  {% endif %}
+{% endmacro %}
+
+<section class="table-section project-document-section">
+  <details open>
+    <summary>
+      <span class="panel-title">Deliverables</span>
+      <span class="count-badge">{{ deliverables | length }}</span>
+    </summary>
+    {{ document_table(deliverables, "No deliverables uploaded yet.") }}
+  </details>
+</section>
+
+<section class="table-section project-document-section">
+  <details open>
+    <summary>
+      <span class="panel-title">Milestones</span>
+      <span class="count-badge">{{ milestones | length }}</span>
+    </summary>
+    {{ document_table(milestones, "No milestone documents uploaded yet.") }}
+  </details>
+</section>
+
+<section id="add-project-document" class="project-upload-panel">
+  <h2>Add a project document</h2>
+  <p>
+    PDF metadata is read automatically. Its project number determines which
+    project receives it; the fields below are fallbacks for other files.
+  </p>
+  <form action="/projects/{{ project.id }}/documents" method="post" enctype="multipart/form-data">
+    <div class="form-grid">
+      <label>
+        Fallback classification
+        <select name="document_type" required>
+          <option value="deliverable">Deliverable</option>
+          <option value="milestone">Milestone</option>
+        </select>
+      </label>
+      <label>
+        Fallback code
+        <input type="text" name="entity_key" placeholder="Optional — D1 or MS1 is assigned automatically">
+      </label>
+    </div>
+    <label>
+      Fallback title
+      <input type="text" name="title" placeholder="Defaults to the file name">
+    </label>
+    <label>
+      Description
+      <textarea name="description" rows="3"></textarea>
+    </label>
+
+    <label>Document file</label>
+    <div id="project-dropzone" class="dropzone project-dropzone" tabindex="0" role="button"
+         aria-label="Drag and drop a project document, or click to browse">
+      <input type="file" name="file" id="project-file-input"
+             accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" required hidden>
+      <p class="dz-prompt">📁 Drag &amp; drop a document here, or <span class="dz-browse">click to browse</span></p>
+      <p class="dz-hint">PDF, Word, Excel, PowerPoint, or text · maximum 50 MB</p>
+      <p class="dz-file" id="project-dz-file" hidden></p>
+    </div>
+    <p class="form-actions">
+      <button type="submit">Add document</button>
+    </p>
+  </form>
+</section>
+
+<script>
+  const dropzone = document.getElementById("project-dropzone");
+  const fileInput = document.getElementById("project-file-input");
+  const fileLabel = document.getElementById("project-dz-file");
+
+  function showProjectFile(file) {
+    if (!file) {
+      fileLabel.hidden = true;
+      dropzone.classList.remove("has-file");
+      return;
+    }
+    fileLabel.textContent = "Selected: " + file.name;
+    fileLabel.hidden = false;
+    dropzone.classList.add("has-file");
+  }
+
+  function acceptProjectFiles(files) {
+    const file = files && files[0];
+    if (!file) return;
+    const allowed = /\.(pdf|docx?|xlsx?|pptx?|txt)$/i;
+    if (!allowed.test(file.name)) {
+      fileLabel.textContent = "Unsupported file type — choose PDF, Office, or text.";
+      fileLabel.hidden = false;
+      dropzone.classList.remove("has-file");
+      return;
+    }
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    fileInput.files = transfer.files;
+    showProjectFile(file);
+  }
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      fileInput.click();
+    }
+  });
+  fileInput.addEventListener("change", () => showProjectFile(fileInput.files[0]));
+  ["dragenter", "dragover"].forEach((name) =>
+    dropzone.addEventListener(name, (event) => {
+      event.preventDefault();
+      dropzone.classList.add("dragover");
+    })
+  );
+  ["dragleave", "dragend", "drop"].forEach((name) =>
+    dropzone.addEventListener(name, (event) => {
+      event.preventDefault();
+      dropzone.classList.remove("dragover");
+    })
+  );
+  dropzone.addEventListener("drop", (event) => acceptProjectFiles(event.dataTransfer.files));
+</script>
+{% endblock %}

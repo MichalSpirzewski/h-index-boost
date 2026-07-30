@@ -1,7 +1,9 @@
 import io
+import mimetypes
 import secrets
 import zipfile
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import (
     BackgroundTasks,
@@ -19,13 +21,27 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app import bibtex, contacts, db, ingest, site_export, word_xml
+from app import (
+    api_v1,
+    bibtex,
+    contacts,
+    db,
+    ingest,
+    project_document_parser,
+    site_export,
+    word_xml,
+)
 from app.affiliations import NCNR_LABEL, NCNR_PHRASE, canonical_affiliation
 from app.models import (
     Article,
     ArticleAuthor,
     ArticleTopic,
     Author,
+    DeliverableDocument,
+    JournalPublication,
+    MilestoneDocument,
+    Project,
+    ProjectDocument,
     SharedSelection,
     SharedSelectionArticle,
     Topic,
@@ -33,9 +49,22 @@ from app.models import (
 from app.templating import templates
 
 app = FastAPI(title="RefBase")
+app.include_router(api_v1.router)
 
 _BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
+
+_PROJECT_FILE_SUFFIXES = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".txt",
+}
+_MAX_PROJECT_FILE_SIZE = 50 * 1024 * 1024
 
 
 @app.on_event("startup")
@@ -121,7 +150,7 @@ async def ingest_endpoint(
                 )
             return result
 
-        article = Article(
+        article = JournalPublication(
             doi=resolved, title=title, source_url=url, added_by=added_by, status="pending"
         )
         session.add(article)
@@ -143,8 +172,14 @@ async def ingest_endpoint(
         background_tasks.add_task(ingest.process_article, article.id)
         if _wants_html(request):
             return RedirectResponse(f"/articles/{article.id}?added=1", status_code=303)
-        return {"status": "created", "article_id": article.id, "doi": resolved,
-                "processing": True, "warnings": []}
+        return {
+            "status": "created",
+            "article_id": article.id,
+            "publication_type": article.publication_type,
+            "doi": resolved,
+            "processing": True,
+            "warnings": [],
+        }
 
     # No DOI anywhere: create a stub from PDF metadata / user input.
     stub_title = title or (ingest.pdf_title(pdf_bytes) if pdf_bytes else None)
@@ -154,7 +189,7 @@ async def ingest_endpoint(
         if similar:
             warnings.append({"type": "possible_duplicate", "matches": similar})
 
-    article = Article(
+    article = JournalPublication(
         title=stub_title, source_url=url, added_by=added_by, status="ready"
     )
     session.add(article)
@@ -164,8 +199,14 @@ async def ingest_endpoint(
     if _wants_html(request):
         suffix = "&check_dup=1" if warnings else ""
         return RedirectResponse(f"/articles/{article.id}?added=1{suffix}", status_code=303)
-    return {"status": "created", "article_id": article.id, "doi": None,
-            "processing": False, "warnings": warnings}
+    return {
+        "status": "created",
+        "article_id": article.id,
+        "publication_type": article.publication_type,
+        "doi": None,
+        "processing": False,
+        "warnings": warnings,
+    }
 
 
 def _duplicate_response(
@@ -183,6 +224,7 @@ def _duplicate_response(
     return {
         "status": "already_exists",
         "article_id": existing.id,
+        "publication_type": existing.publication_type,
         "doi": existing.doi,
         "pdf_attached": pdf_attached,
         "detail": "Article is already in the library.",
@@ -226,15 +268,359 @@ def article_status(article_id: int, session: Session = Depends(db.get_db)):
         raise HTTPException(status_code=404, detail="Article not found")
     return {
         "id": article.id,
+        "publication_type": article.publication_type,
         "doi": article.doi,
         "title": article.title,
         "year": article.year,
         "journal": article.journal,
+        "conference_name": article.conference_name,
+        "proceedings_title": article.proceedings_title,
+        "conference_location": article.conference_location,
+        "conference_start_date": article.conference_start_date,
+        "conference_end_date": article.conference_end_date,
+        "venue_name": article.venue_name,
         "status": article.status,
         "has_pdf": article.pdf_path is not None,
         "authors": [a.full_name for a in article.authors],
         "topics": [t.name for t in article.topics],
     }
+
+
+def _project_or_404(session: Session, project_id: str) -> Project:
+    project = session.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(selectinload(Project.documents))
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+def _project_page_context(
+    request: Request,
+    project: Project,
+    *,
+    error: str | None = None,
+    project_number_value: str | None = None,
+) -> dict:
+    documents = [document for document in project.documents if document.status != "archived"]
+    return {
+        "project": project,
+        "deliverables": [
+            document
+            for document in documents
+            if document.document_type == "deliverable"
+        ],
+        "milestones": [
+            document
+            for document in documents
+            if document.document_type == "milestone"
+        ],
+        "error": error,
+        "project_number_value": (
+            project.project_number
+            if project_number_value is None
+            else project_number_value
+        ),
+        "project_number_updated": request.query_params.get(
+            "project_number_updated"
+        )
+        == "1",
+    }
+
+
+@app.get("/projects")
+def project_list(request: Request, session: Session = Depends(db.get_db)):
+    projects = session.scalars(
+        select(Project)
+        .options(selectinload(Project.documents))
+        .order_by(Project.created_at.desc())
+    ).all()
+    return templates.TemplateResponse(
+        request,
+        "projects.html",
+        {"projects": projects},
+    )
+
+
+@app.get("/projects/new")
+def new_project_page(request: Request):
+    return templates.TemplateResponse(request, "project_new.html", {})
+
+
+@app.post("/projects")
+def create_project(
+    request: Request,
+    name: str = Form(...),
+    acronym: str | None = Form(None),
+    project_number: str = Form(...),
+    description: str | None = Form(None),
+    session: Session = Depends(db.get_db),
+):
+    name = name.strip()
+    acronym = _clean(acronym)
+    project_number = project_number.strip()
+    description = _clean(description)
+    if not name or not project_number:
+        return templates.TemplateResponse(
+            request,
+            "project_new.html",
+            {
+                "error": "Project name and project number are required.",
+                "name": name,
+                "acronym": acronym or "",
+                "project_number": project_number,
+                "description": description or "",
+            },
+            status_code=422,
+        )
+
+    project = Project(
+        name=name,
+        acronym=acronym,
+        project_number=project_number,
+        description=description,
+    )
+    session.add(project)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request,
+            "project_new.html",
+            {
+                "error": "A project with this acronym or project number already exists.",
+                "name": name,
+                "acronym": acronym or "",
+                "project_number": project_number,
+                "description": description or "",
+            },
+            status_code=409,
+        )
+    return RedirectResponse(f"/projects/{project.id}", status_code=303)
+
+
+@app.get("/projects/{project_id}")
+def project_detail(
+    request: Request,
+    project_id: str,
+    session: Session = Depends(db.get_db),
+):
+    project = _project_or_404(session, project_id)
+    return templates.TemplateResponse(
+        request,
+        "project_detail.html",
+        _project_page_context(request, project),
+    )
+
+
+@app.post("/projects/{project_id}/project-number")
+def update_project_number(
+    request: Request,
+    project_id: str,
+    project_number: str = Form(...),
+    session: Session = Depends(db.get_db),
+):
+    project = _project_or_404(session, project_id)
+    project_number = project_number.strip()
+    if not project_number:
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _project_page_context(
+                request,
+                project,
+                error="Project number is required.",
+                project_number_value=project_number,
+            ),
+            status_code=422,
+        )
+
+    project.project_number = project_number
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        project = _project_or_404(session, project_id)
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _project_page_context(
+                request,
+                project,
+                error=f"Another project already uses number {project_number}.",
+                project_number_value=project_number,
+            ),
+            status_code=409,
+        )
+    return RedirectResponse(
+        f"/projects/{project.id}?project_number_updated=1",
+        status_code=303,
+    )
+
+
+def _next_project_entity_key(
+    session: Session,
+    project_id: str,
+    document_type: str,
+) -> str:
+    prefix = "D" if document_type == "deliverable" else "MS"
+    existing = set(
+        session.scalars(
+            select(ProjectDocument.external_entity_key).where(
+                ProjectDocument.local_project_id == project_id,
+                ProjectDocument.document_type == document_type,
+            )
+        )
+    )
+    number = 1
+    while f"{prefix}{number}" in existing:
+        number += 1
+    return f"{prefix}{number}"
+
+
+@app.post("/projects/{project_id}/documents")
+async def upload_project_document(
+    request: Request,
+    project_id: str,
+    file: UploadFile = File(...),
+    document_type: str = Form(...),
+    entity_key: str | None = Form(None),
+    title: str | None = Form(None),
+    description: str | None = Form(None),
+    session: Session = Depends(db.get_db),
+):
+    project = _project_or_404(session, project_id)
+    if document_type not in {"deliverable", "milestone"}:
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _project_page_context(
+                request, project, error="Choose deliverable or milestone."
+            ),
+            status_code=422,
+        )
+
+    original_filename = Path(file.filename or "").name
+    suffix = Path(original_filename).suffix.lower()
+    content = await file.read()
+    if not original_filename or suffix not in _PROJECT_FILE_SUFFIXES:
+        error = "Choose a PDF, Word, Excel, PowerPoint, or text document."
+    elif not content:
+        error = "The selected file is empty."
+    elif len(content) > _MAX_PROJECT_FILE_SIZE:
+        error = "The selected file is larger than 50 MB."
+    else:
+        error = None
+    if error:
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _project_page_context(request, project, error=error),
+            status_code=422,
+        )
+
+    parsed = (
+        project_document_parser.parse_project_document_pdf(content)
+        if suffix == ".pdf"
+        else project_document_parser.ParsedProjectDocument()
+    )
+    target_project = project
+    if parsed.project_number:
+        matched_project = session.scalar(
+            select(Project).where(Project.project_number == parsed.project_number)
+        )
+        if matched_project is None:
+            return templates.TemplateResponse(
+                request,
+                "project_detail.html",
+                _project_page_context(
+                    request,
+                    project,
+                    error=(
+                        f"The PDF belongs to project {parsed.project_number}, "
+                        "but no project with that number exists."
+                    ),
+                ),
+                status_code=422,
+            )
+        target_project = matched_project
+
+    document_type = parsed.document_type or document_type
+    entity_key = _clean(entity_key) or parsed.entity_key or _next_project_entity_key(
+        session, target_project.id, document_type
+    )
+    document_class = (
+        DeliverableDocument
+        if document_type == "deliverable"
+        else MilestoneDocument
+    )
+    stored_path = db.PROJECT_DOCUMENT_DIR / f"{uuid4()}{suffix}"
+    stored_path.write_bytes(content)
+    document = document_class(
+        source_system="refbase",
+        local_project_id=target_project.id,
+        external_project_id=target_project.id,
+        external_entity_key=entity_key,
+        title=_clean(title) or parsed.title or Path(original_filename).stem,
+        description=_clean(description),
+        lead_beneficiary=parsed.lead_beneficiary,
+        authors_json=project_document_parser.encode_authors(parsed.authors),
+        published_date=parsed.published_date,
+        pdf_text=parsed.full_text,
+        parse_status=(
+            "parsed"
+            if suffix == ".pdf" and not parsed.warnings
+            else "partial"
+            if suffix == ".pdf"
+            else "not_parsed"
+        ),
+        parse_warnings=project_document_parser.encode_warnings(parsed.warnings),
+        original_filename=original_filename,
+        file_path=str(stored_path),
+        mime_type=file.content_type or mimetypes.guess_type(original_filename)[0],
+        byte_size=len(content),
+    )
+    session.add(document)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        stored_path.unlink(missing_ok=True)
+        project = _project_or_404(session, project_id)
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _project_page_context(
+                request,
+                project,
+                error=f"A {document_type} with code {entity_key} already exists.",
+            ),
+            status_code=409,
+        )
+    return RedirectResponse(f"/projects/{target_project.id}", status_code=303)
+
+
+@app.get("/project-documents/{document_id}/file")
+def project_document_file(
+    document_id: str,
+    session: Session = Depends(db.get_db),
+    download: int = 0,
+):
+    document = session.get(ProjectDocument, document_id)
+    if document is None or document.status == "archived" or not document.file_path:
+        raise HTTPException(status_code=404, detail="Project document file not found")
+    path = Path(document.file_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Project document file not found")
+    return FileResponse(
+        path,
+        media_type=document.mime_type or "application/octet-stream",
+        filename=document.original_filename or path.name,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 # --------------------------------------------------------------------------- pages (minimal until M2)

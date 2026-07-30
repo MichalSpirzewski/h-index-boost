@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="title-row">
+  <div>
+    <h1>Projects</h1>
+    <p class="subtle">Independent workspaces for deliverables, milestones, and their files.</p>
+  </div>
+  <a class="btn btn-primary" href="/projects/new">Create a project</a>
+</div>
+
+{% if projects %}
+<div class="project-grid">
+  {% for project in projects %}
+  <a class="project-card" href="/projects/{{ project.id }}">
+    <span class="project-card-title">{{ project.acronym or project.name }}</span>
+    {% if project.acronym %}<span class="project-card-name">{{ project.name }}</span>{% endif %}
+    {% if project.project_number %}<span class="project-card-number">Project {{ project.project_number }}</span>{% endif %}
+    {% if project.description %}<span class="project-card-description">{{ project.description }}</span>{% endif %}
+    <span class="project-card-count">
+      {{ project.documents | rejectattr("status", "equalto", "archived") | list | length }}
+      document{{ "" if (project.documents | rejectattr("status", "equalto", "archived") | list | length) == 1 else "s" }}
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <h2>No projects yet</h2>
+  <p>Create the first project to start collecting its deliverables and milestones.</p>
+  <a class="btn btn-primary" href="/projects/new">Create a project</a>
+</div>
+{% endif %}
+{% endblock %}

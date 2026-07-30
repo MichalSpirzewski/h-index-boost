@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/projects">← Projects</a></p>
+<h1>Create a project</h1>
+<p>Create an independent workspace for project deliverables and milestones.</p>
+
+{% if error %}<div class="banner warn">{{ error }}</div>{% endif %}
+
+<form action="/projects" method="post" class="project-form">
+  <label>
+    Project name
+    <input type="text" name="name" value="{{ name or '' }}" required autofocus>
+  </label>
+  <label>
+    Acronym
+    <input type="text" name="acronym" value="{{ acronym or '' }}" placeholder="Optional, for example TREASURE">
+  </label>
+  <label>
+    Project number
+    <input type="text" name="project_number" value="{{ project_number or '' }}"
+           placeholder="For example 101164616" required>
+  </label>
+  <label>
+    Description
+    <textarea name="description" rows="5" placeholder="What is this project about?">{{ description or '' }}</textarea>
+  </label>
+  <p class="form-actions">
+    <button type="submit">Create project</button>
+    <a class="btn" href="/projects">Cancel</a>
+  </p>
+</form>
+{% endblock %}
