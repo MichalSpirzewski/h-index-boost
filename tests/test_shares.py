@@ -8,10 +8,10 @@ from sqlalchemy import select
 
 def _articles():
     from app import db
-    from app.models import Article, ArticleAuthor, Author, Topic
+    from app.models import Article, ArticleAuthor, Author, Keyword
 
     with db.SessionLocal() as session:
-        topic = Topic(name="Shared topic")
+        keyword = Keyword(name="Shared keyword")
         papers = []
         for index, title in enumerate(("First shared paper", "Second shared paper"), start=1):
             author = Author(full_name=f"Alex Author{index}")
@@ -29,7 +29,7 @@ def _articles():
                     affiliation="National Centre for Nuclear Research",
                 )
             ]
-            paper.topics = [topic]
+            paper.keywords = [keyword]
             session.add(paper)
             papers.append(paper)
         unselected = Article(title="Not selected", status="ready")

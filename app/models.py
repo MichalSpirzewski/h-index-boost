@@ -69,8 +69,8 @@ class Publication(Base):
         order_by="ArticleAuthor.position",
         cascade="all, delete-orphan",
     )
-    topics: Mapped[list[Topic]] = relationship(
-        secondary="article_topics", back_populates="articles"
+    keywords: Mapped[list[Keyword]] = relationship(
+        secondary="article_keywords", back_populates="articles"
     )
 
     __mapper_args__ = {
@@ -81,6 +81,20 @@ class Publication(Base):
     @property
     def authors(self) -> list[Author]:
         return [link.author for link in self.author_links]
+
+    @property
+    def topics(self) -> list[Topic]:
+        """The topics this paper falls under, via the keywords it carries.
+
+        Derived rather than stored: a paper belongs to a topic exactly as long as
+        one of its keywords does, so reclassifying a keyword moves every paper
+        carrying it at once.
+        """
+        found: dict[int, Topic] = {}
+        for keyword in self.keywords:
+            for topic in keyword.topics:
+                found[topic.id] = topic
+        return sorted(found.values(), key=lambda topic: topic.name.casefold())
 
     @property
     def venue_name(self) -> str | None:
@@ -250,15 +264,60 @@ class Author(Base):
         return self.merged_into_id is not None
 
 
-class Topic(Base):
-    __tablename__ = "topics"
+class Keyword(Base):
+    """One author/publisher keyword as it appears on a paper.
+
+    Keywords stay as specific as their source made them (Crossref subjects, S2
+    fields of study, the PDF's own "Keywords:" line). Grouping them is the job of
+    Topic, so nothing here is ever merged or rewritten.
+    """
+
+    __tablename__ = "keywords"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
 
     articles: Mapped[list[Article]] = relationship(
-        secondary="article_topics", back_populates="topics"
+        secondary="article_keywords", back_populates="keywords"
     )
+    topics: Mapped[list[Topic]] = relationship(
+        secondary="topic_keywords", back_populates="keywords"
+    )
+
+
+class Topic(Base):
+    """A manually curated group of keywords.
+
+    Author keywords are far too exclusive to browse on their own — a small
+    library easily carries more keywords than papers. A topic is the coarser
+    layer above them: someone names it once and then clicks the keywords that
+    belong to it, and every paper carrying one of those keywords joins the topic.
+    """
+
+    __tablename__ = "topics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+
+    keywords: Mapped[list[Keyword]] = relationship(
+        secondary="topic_keywords",
+        back_populates="topics",
+        order_by="Keyword.name",
+    )
+
+    @property
+    def articles(self) -> list[Article]:
+        """Every non-hidden paper carrying at least one of this topic's keywords."""
+        found: dict[int, Article] = {}
+        for keyword in self.keywords:
+            for article in keyword.articles:
+                if not article.hidden:
+                    found[article.id] = article
+        return list(found.values())
 
 
 class ArticleAuthor(Base):
@@ -274,11 +333,24 @@ class ArticleAuthor(Base):
     author: Mapped[Author] = relationship(back_populates="article_links")
 
 
-class ArticleTopic(Base):
-    __tablename__ = "article_topics"
+class ArticleKeyword(Base):
+    __tablename__ = "article_keywords"
 
     article_id: Mapped[int] = mapped_column(ForeignKey("articles.id"), primary_key=True)
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), primary_key=True)
+    keyword_id: Mapped[int] = mapped_column(ForeignKey("keywords.id"), primary_key=True)
+
+
+class TopicKeyword(Base):
+    """One keyword classified into one topic. A keyword may sit in several."""
+
+    __tablename__ = "topic_keywords"
+
+    topic_id: Mapped[int] = mapped_column(
+        ForeignKey("topics.id", ondelete="CASCADE"), primary_key=True
+    )
+    keyword_id: Mapped[int] = mapped_column(
+        ForeignKey("keywords.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class SharedSelection(Base):

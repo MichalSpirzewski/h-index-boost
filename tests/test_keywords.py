@@ -66,7 +66,7 @@ def test_rescan_stored_pdf_links_keywords(client) -> None:
     assert resp.json()["keywords"] == ["thermal hydraulics", "fuel cladding"]
 
     detail = client.get(f"/api/articles/{article_id}").json()
-    assert detail["topics"] == ["thermal hydraulics", "fuel cladding"]
+    assert detail["keywords"] == ["thermal hydraulics", "fuel cladding"]
 
     # browser posts land back on the article page with a result banner
     page = client.post(
@@ -89,7 +89,7 @@ def test_bulk_rescan_covers_all_stored_pdfs(client) -> None:
     assert str(without_kw) not in body["articles_with_keywords"]
 
 
-def test_uploaded_pdf_keywords_become_topics_and_dashboard_chips(client) -> None:
+def test_uploaded_pdf_keywords_are_linked_and_shown_as_dashboard_chips(client) -> None:
     pdf = _make_pdf(text="Keywords: neutronics, reactor safety")
     resp = client.post(
         "/api/ingest",
@@ -101,7 +101,7 @@ def test_uploaded_pdf_keywords_become_topics_and_dashboard_chips(client) -> None
     assert body["doi"] is None
 
     detail = client.get(f"/api/articles/{body['article_id']}").json()
-    assert detail["topics"] == ["neutronics", "reactor safety"]
+    assert detail["keywords"] == ["neutronics", "reactor safety"]
 
     dashboard = client.get("/").text
     assert '<span class="chip">neutronics</span>' in dashboard

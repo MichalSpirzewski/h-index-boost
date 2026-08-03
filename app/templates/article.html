@@ -16,7 +16,7 @@
 {% if rescanned >= 0 %}
 <div class="banner {{ 'ok' if rescanned else 'info' }}">
   {% if rescanned %}
-    PDF rescanned — {{ rescanned }} keyword{{ "s" if rescanned != 1 }} linked as topics.
+    PDF rescanned — {{ rescanned }} keyword{{ "s" if rescanned != 1 }} linked.
   {% else %}
     PDF rescanned — no keywords found in its metadata or first pages.
   {% endif %}
@@ -71,7 +71,8 @@
     {% endif %}
   </dd>
   {% endif %}
-  {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+  {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}<a href="/topics/{{ topic.id }}">{{ topic.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+  {% if article.keywords %}<dt>Keywords</dt><dd>{% for keyword in article.keywords %}<a href="/?keyword={{ keyword.id }}">{{ keyword.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
   {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
 </dl>
 

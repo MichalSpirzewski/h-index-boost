@@ -6,7 +6,7 @@
   {%- set active = (sort == key) -%}
   {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
   <th class="sortable{% if active %} active{% endif %}">
-    <a href="/?sort={{ key }}&order={{ next_order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
+    <a href="/?sort={{ key }}&order={{ next_order }}{% if active_keyword %}&keyword={{ active_keyword.id }}{% endif %}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
       {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
     </a>
   </th>
@@ -15,6 +15,7 @@
 <div class="page-actions">
   <a class="btn" href="/projects/new">Create a project</a>
   <a class="btn" href="/projects">Browse projects</a>
+  <a class="btn" href="/topics">Manage topics</a>
 </div>
 {% macro author_group(pairs) %}
 <ul class="author-list">
@@ -45,16 +46,34 @@
       </details>
     </section>
     {% endif %}
-    {% if topic_stats %}
     <section class="authors-panel topics-panel">
       <details{% if active_topic %} open{% endif %}>
-        <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
+        <summary><span class="panel-title">Topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
+        {% if topic_stats %}
         <div class="chips">
-          {% for topic, count in topic_stats %}
+          {% for topic, papers, keyword_count in topic_stats %}
           {%- set is_active = active_topic and active_topic.id == topic.id -%}
-          <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
+          <a class="chip chip-link topic-chip{% if is_active %} chip-active{% endif %}"
              href="{% if is_active %}/{% else %}/?topic={{ topic.id }}{% endif %}"
-             title="{% if is_active %}Clear filter{% else %}{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+             title="{% if is_active %}Clear filter{% else %}{{ papers }} paper{{ '' if papers == 1 else 's' }} across {{ keyword_count }} keyword{{ '' if keyword_count == 1 else 's' }}{% endif %}">{{ topic.name }} <span class="chip-count">{{ papers }}</span></a>
+          {% endfor %}
+        </div>
+        <p class="panel-hint"><a href="/topics">Manage topics</a> — group keywords so the library browses by subject, not by 100+ tags.</p>
+        {% else %}
+        <p class="empty-panel">No topics yet. <a href="/topics">Create the first one</a> to group keywords into larger subjects.</p>
+        {% endif %}
+      </details>
+    </section>
+    {% if keyword_stats %}
+    <section class="authors-panel topics-panel">
+      <details{% if active_keyword %} open{% endif %}>
+        <summary><span class="panel-title">Keywords</span> <span class="count-badge">{{ keyword_stats | length }}</span></summary>
+        <div class="chips">
+          {% for keyword, count in keyword_stats %}
+          {%- set is_active = active_keyword and active_keyword.id == keyword.id -%}
+          <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
+             href="{% if is_active %}/{% else %}/?keyword={{ keyword.id }}{% endif %}"
+             title="{% if is_active %}Clear filter{% else %}{{ count }} article{{ '' if count == 1 else 's' }} tagged “{{ keyword.name }}”{% endif %}">{{ keyword.name }} <span class="chip-count">{{ count }}</span></a>
           {% endfor %}
         </div>
       </details>
@@ -80,9 +99,14 @@
   </section>
 </div>
 {#- Counts live on the section headers below, so the page title carries none. -#}
-{% if active_topic %}
-<h1>Papers tagged “{{ active_topic.name }}”</h1>
-<p class="sort"><a href="/">← All papers</a> · click a column header to sort.</p>
+{% if active_topic or active_keyword %}
+<h1>
+  {%- if active_topic and active_keyword %}Papers in “{{ active_topic.name }}” tagged “{{ active_keyword.name }}”
+  {%- elif active_topic %}Papers in “{{ active_topic.name }}”
+  {%- else %}Papers tagged “{{ active_keyword.name }}”{% endif -%}
+</h1>
+<p class="sort"><a href="/">← All papers</a> · click a column header to sort.{% if active_topic %}
+  <a href="/topics/{{ active_topic.id }}">Edit this topic</a>.{% endif %}</p>
 {% else %}
 {%- set is_default = (sort == "year" and order == "desc") -%}
 <h1>
@@ -103,6 +127,7 @@
     send the reader back to the view they were looking at. -#}
 <input type="hidden" name="sort" value="{{ sort }}">
 <input type="hidden" name="order" value="{{ order }}">
+{% if active_keyword %}<input type="hidden" name="keyword" value="{{ active_keyword.id }}">{% endif %}
 {% if active_topic %}<input type="hidden" name="topic" value="{{ active_topic.id }}">{% endif %}
 {{ export.export_bar() }}
 <table class="wide-table">
@@ -136,12 +161,13 @@
       {{ export.select_td(article) }}
       <td class="article-title-cell">
         <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
-        {% if article.topics or article.abstract %}
+        {% if article.keywords or article.topics or article.abstract %}
         <div class="article-preview">
-          {% if article.topics %}
+          {% if article.topics or article.keywords %}
           <div class="chips">
-            {% for topic in article.topics[:5] %}<span class="chip">{{ topic.name }}</span>{% endfor %}
-            {% if article.topics | length > 5 %}<span class="chip">+{{ article.topics | length - 5 }}</span>{% endif %}
+            {% for topic in article.topics %}<span class="chip topic-chip">{{ topic.name }}</span>{% endfor %}
+            {% for keyword in article.keywords[:5] %}<span class="chip">{{ keyword.name }}</span>{% endfor %}
+            {% if article.keywords | length > 5 %}<span class="chip">+{{ article.keywords | length - 5 }}</span>{% endif %}
           </div>
           {% endif %}
           {% if article.abstract %}

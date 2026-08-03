@@ -296,6 +296,60 @@ button { padding: 0.5rem 1rem; }
 .chip-link:hover { background: #dfe7f1; }
 .chip-active { background: #1a4d8f; color: #fff; }
 .chip-active .chip-count { color: #cfe0f5; }
+/* Topics read as the coarser layer, so they carry a different tint from the
+   keyword chips they group. */
+.topic-chip { background: #e7efe9; border: 1px solid #bcd7c4; }
+.topic-chip .chip-count { color: #1c6b3a; }
+.topic-chip:hover { background: #d7e8dd; }
+.topic-chip.chip-active { background: #1c6b3a; border-color: #1c6b3a; color: #fff; }
+.topic-chip.chip-active .chip-count { color: #cde8d8; }
+/* The topic page's keyword picker: chips are submit buttons, one per keyword. */
+button.chip {
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  border: 0;
+  padding: 0 0.55rem;
+}
+.keyword-picker { max-height: 22rem; overflow-y: auto; padding: 0.25rem 0; }
+.keyword-search input { padding: 0.3rem 0.5rem; min-width: 18rem; }
+.no-matches { color: #6b7785; }
+.topic-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.topic-form label { display: flex; flex-direction: column; font-size: 0.9rem; gap: 0.2rem; }
+.topic-form input { padding: 0.3rem 0.5rem; min-width: 18rem; }
+.topic-delete-form { margin-top: 0.5rem; }
+.btn.danger { border-color: #e0b4b4; color: #8b2f2f; background: #fdf6f6; }
+.btn.danger:hover { background: #f8e6e6; }
+.topic-description { color: #556; margin-top: -0.5rem; }
+.topic-editor { margin: 1rem 0 1.5rem; }
+.topic-editor summary { cursor: pointer; font-weight: 600; }
+.topic-cards { list-style: none; margin: 0; padding: 0; }
+.topic-card {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.topic-card-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.5rem; }
+.topic-card-head .pub-count {
+  background: #eef2f7;
+  color: #445;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.8rem;
+}
+.topic-card-head .pub-count.subtle { color: #6b7785; }
+.topic-card-name { font-size: 1.05rem; font-weight: 600; text-decoration: none; color: #1a4d8f; }
+.topic-card-description { margin: 0.25rem 0; color: #556; font-size: 0.9rem; }
+.topic-card-actions { margin: 0.5rem 0 0; }
+.panel-hint { margin: 0.6rem 0 0; font-size: 0.85rem; color: #6b7785; }
 .authors-panel .count-badge {
   display: inline-block;
   background: #1a4d8f;
@@ -504,6 +558,7 @@ th.sortable .arrow { display: inline-block; width: 0.9em; font-size: 0.8em; colo
 .banner.ok { background: #e6f6ea; border: 1px solid #9ad2a8; }
 .banner.info { background: #e8f1fb; border: 1px solid #9dc0e8; }
 .banner.warn { background: #fdf3e0; border: 1px solid #e8c98a; }
+.banner.error { background: #fdeaea; border: 1px solid #e8a2a2; }
 .banner-actions { margin-left: 0.5rem; font-size: 0.9rem; }
 .form-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
 .form-actions .btn { padding: 0.5rem 0.9rem; }

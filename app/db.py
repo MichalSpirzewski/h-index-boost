@@ -64,7 +64,47 @@ _FTS_DDL = [
 ]
 
 
+def _rename_legacy_keyword_tables(conn) -> None:
+    """`topics`/`article_topics` used to hold what is now called keywords.
+
+    Topics became the layer *above* keywords, so the old tables are renamed and
+    the freed-up `topics` name goes to the new grouping model. Runs before
+    create_all, or the new empty `topics` table would block the rename.
+
+    The legacy layout is recognised by `article_topics` — a table the current
+    schema never creates.
+    """
+    tables = {
+        row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+    }
+    if "article_topics" not in tables:  # fresh database, or already migrated
+        return
+
+    def row_count(table: str) -> int:
+        return conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0
+
+    # create_all may have made the new tables already — it does whenever the
+    # models reach a deployment before this migration does. They are empty in
+    # that case and have to go before the legacy tables can take their names.
+    # Children first: each references the table after it.
+    for table in ("topic_keywords", "article_keywords", "keywords"):
+        if table in tables:
+            if row_count(table):  # a populated new schema: nothing to move
+                return
+            conn.execute(text(f"DROP TABLE {table}"))
+
+    conn.execute(text("ALTER TABLE topics RENAME TO keywords"))
+    # SQLite rewrites the child table's foreign key on the rename above, so only
+    # the column name is left to fix.
+    conn.execute(text("ALTER TABLE article_topics RENAME TO article_keywords"))
+    conn.execute(
+        text("ALTER TABLE article_keywords RENAME COLUMN topic_id TO keyword_id")
+    )
+
+
 def init_db() -> None:
+    with engine.begin() as conn:
+        _rename_legacy_keyword_tables(conn)
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         # Lightweight in-place migration for databases created before pdf_text existed.

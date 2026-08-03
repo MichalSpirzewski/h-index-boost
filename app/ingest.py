@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import db
-from app.models import Article, ArticleAuthor, ArticleTopic, Author, Topic
+from app.models import Article, ArticleAuthor, ArticleKeyword, Author, Keyword
 
 CROSSREF_MAILTO = os.environ.get("CROSSREF_MAILTO", "guhard@gmail.com")
 TITLE_SIMILARITY_THRESHOLD = 92
@@ -840,13 +840,13 @@ def merge_authors(session: Session, source: Author, target: Author) -> int:
     return moved
 
 
-def _get_or_create_topic(session: Session, name: str) -> Topic:
-    topic = session.scalar(select(Topic).where(Topic.name == name))
-    if topic is None:
-        topic = Topic(name=name)
-        session.add(topic)
+def _get_or_create_keyword(session: Session, name: str) -> Keyword:
+    keyword = session.scalar(select(Keyword).where(Keyword.name == name))
+    if keyword is None:
+        keyword = Keyword(name=name)
+        session.add(keyword)
         session.flush()
-    return topic
+    return keyword
 
 
 def iso_date_from_parts(date_parts: list | None) -> str | None:
@@ -938,35 +938,36 @@ def apply_crossref(session: Session, article: Article, message: dict[str, Any]) 
         position += 1
 
     for subject in message.get("subject") or []:
-        _link_topic(session, article, subject)
+        _link_keyword(session, article, subject)
 
 
-def _link_topic(session: Session, article: Article, name: str) -> None:
+def _link_keyword(session: Session, article: Article, name: str) -> None:
     name = name.strip()
     if not name:
         return
-    topic = _get_or_create_topic(session, name)
+    keyword = _get_or_create_keyword(session, name)
     exists = session.scalar(
-        select(ArticleTopic).where(
-            ArticleTopic.article_id == article.id, ArticleTopic.topic_id == topic.id
+        select(ArticleKeyword).where(
+            ArticleKeyword.article_id == article.id,
+            ArticleKeyword.keyword_id == keyword.id,
         )
     )
     if not exists:
-        session.add(ArticleTopic(article_id=article.id, topic_id=topic.id))
+        session.add(ArticleKeyword(article_id=article.id, keyword_id=keyword.id))
 
 
 def apply_semantic_scholar(session: Session, article: Article, data: dict[str, Any]) -> None:
     if not article.abstract and data.get("abstract"):
         article.abstract = data["abstract"]
     for field in data.get("fieldsOfStudy") or []:
-        _link_topic(session, article, field)
+        _link_keyword(session, article, field)
 
 
 def add_pdf_keywords(session: Session, article: Article, pdf_bytes: bytes) -> list[str]:
-    """Extract author keywords from an uploaded PDF and link them as topics."""
+    """Extract author keywords from an uploaded PDF and link them to the article."""
     keywords = extract_keywords_from_pdf(pdf_bytes)
     for keyword in keywords:
-        _link_topic(session, article, keyword)
+        _link_keyword(session, article, keyword)
     if keywords:
         session.commit()
     return keywords

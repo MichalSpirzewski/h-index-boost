@@ -7,7 +7,7 @@
   var tables = Array.prototype.slice.call(document.querySelectorAll(".js-offline-table"));
   var filterBar = document.getElementById("js-filter-bar");
   var filterLabel = document.getElementById("js-filter-label");
-  // One filter at a time (author / topic / journal), plus the free-text box.
+  // One filter at a time (author / keyword / topic / journal), plus the free-text box.
   var state = { text: "", type: null, value: null };
 
   // --- helpers ---------------------------------------------------------------
@@ -50,6 +50,9 @@
     }
     if (state.type === "author") {
       return row.getAttribute("data-authors").indexOf(" " + state.value + " ") !== -1;
+    }
+    if (state.type === "keyword") {
+      return row.getAttribute("data-keywords").indexOf(" " + state.value + " ") !== -1;
     }
     if (state.type === "topic") {
       return row.getAttribute("data-topics").indexOf(" " + state.value + " ") !== -1;
@@ -109,6 +112,13 @@
     if (author) {
       event.preventDefault();
       setFilter("author", author.getAttribute("data-author"), author.textContent.trim());
+      return;
+    }
+    var keyword = target.closest(".js-keyword-filter");
+    if (keyword) {
+      event.preventDefault();
+      var keywordName = keyword.firstChild ? keyword.firstChild.textContent.trim() : "";
+      setFilter("keyword", keyword.getAttribute("data-keyword"), keywordName);
       return;
     }
     var topic = target.closest(".js-topic-filter");

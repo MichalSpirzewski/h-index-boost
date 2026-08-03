@@ -23,6 +23,7 @@ from app.models import (
     ConferencePublication,
     DeliverableDocument,
     JournalPublication,
+    Keyword,
     MilestoneDocument,
     ProjectDocument,
     Publication,
@@ -113,6 +114,8 @@ class PublicationResponse(ApiModel):
     hidden: bool
     has_pdf: bool
     authors: list[str]
+    keywords: list[str]
+    # The curated groups the keywords above belong to, not a second tag list.
     topics: list[str]
     created_at: datetime
 
@@ -185,6 +188,7 @@ def _publication_response(publication: Publication) -> PublicationResponse:
         hidden=publication.hidden,
         has_pdf=publication.pdf_path is not None,
         authors=[author.full_name for author in publication.authors],
+        keywords=[keyword.name for keyword in publication.keywords],
         topics=[topic.name for topic in publication.topics],
         created_at=publication.created_at,
     )
@@ -224,7 +228,7 @@ def _publication_or_404(session: Session, publication_id: int) -> Publication:
         .where(Publication.id == publication_id)
         .options(
             selectinload(Publication.author_links).selectinload(ArticleAuthor.author),
-            selectinload(Publication.topics),
+            selectinload(Publication.keywords).selectinload(Keyword.topics),
         )
     )
     if publication is None:
@@ -283,7 +287,7 @@ def list_publications(
 ) -> list[PublicationResponse]:
     query = select(Publication).options(
         selectinload(Publication.author_links).selectinload(ArticleAuthor.author),
-        selectinload(Publication.topics),
+        selectinload(Publication.keywords).selectinload(Keyword.topics),
     )
     if publication_type:
         query = query.where(Publication.publication_type == publication_type)

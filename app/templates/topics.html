@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{#- Topic overview: the groups that exist, and the keywords still waiting for one. -#}
+{% block content %}
+<h1>Topics</h1>
+<p class="sort">
+  A topic is a group of keywords. Author keywords stay as specific as the papers
+  made them ({{ keyword_total }} of them so far), so browse by topic and click the
+  keywords that belong to each.
+</p>
+
+{% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+
+<section class="topic-create">
+  <h2>New topic</h2>
+  <form method="post" action="/topics" class="topic-form">
+    <label>Name
+      <input type="text" name="name" value="{{ name }}" required
+             placeholder="e.g. Thermal hydraulics" autocomplete="off">
+    </label>
+    <label>Description <span class="subtle">(optional)</span>
+      <input type="text" name="description" value="{{ description }}"
+             placeholder="What belongs in this topic" autocomplete="off">
+    </label>
+    <button type="submit">Create topic</button>
+  </form>
+</section>
+
+<h2>All topics <span class="count-badge">{{ topic_stats | length }}</span></h2>
+{% if topic_stats %}
+<ul class="topic-cards">
+  {% for topic, papers, keyword_count in topic_stats %}
+  <li class="topic-card">
+    <div class="topic-card-head">
+      <a class="topic-card-name" href="/topics/{{ topic.id }}">{{ topic.name }}</a>
+      <span class="pub-count" title="{{ papers }} paper{{ '' if papers == 1 else 's' }} in this topic">{{ papers }} paper{{ "" if papers == 1 else "s" }}</span>
+      <span class="pub-count subtle" title="{{ keyword_count }} keyword{{ '' if keyword_count == 1 else 's' }} classified here">{{ keyword_count }} keyword{{ "" if keyword_count == 1 else "s" }}</span>
+    </div>
+    {% if topic.description %}<p class="topic-card-description">{{ topic.description }}</p>{% endif %}
+    {% if topic.keywords %}
+    <div class="chips">
+      {% for keyword in topic.keywords[:12] %}<span class="chip">{{ keyword.name }}</span>{% endfor %}
+      {% if topic.keywords | length > 12 %}<span class="chip">+{{ topic.keywords | length - 12 }}</span>{% endif %}
+    </div>
+    {% else %}
+    <p class="empty-panel">No keywords yet — <a href="/topics/{{ topic.id }}">pick some</a>.</p>
+    {% endif %}
+    <p class="topic-card-actions">
+      <a class="btn" href="/topics/{{ topic.id }}">Edit keywords</a>
+      {% if papers %}<a class="btn" href="/?topic={{ topic.id }}">Show papers</a>{% endif %}
+    </p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No topics yet. Create one above, then click the keywords that belong to it.</p>
+{% endif %}
+
+<h2>Unclassified keywords <span class="count-badge">{{ unclassified | length }}</span></h2>
+{% if unclassified %}
+<p class="sort">These are in no topic yet. Open a topic to classify them.</p>
+<div class="chips">
+  {% for keyword, count in unclassified %}
+  <a class="chip chip-link" href="/?keyword={{ keyword.id }}"
+     title="{{ count }} paper{{ '' if count == 1 else 's' }} tagged “{{ keyword.name }}”">{{ keyword.name }} <span class="chip-count">{{ count }}</span></a>
+  {% endfor %}
+</div>
+{% else %}
+<p>Every keyword in the library belongs to a topic.</p>
+{% endif %}
+{% endblock %}

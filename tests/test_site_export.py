@@ -109,7 +109,7 @@ def test_page_mirrors_the_dashboard_table_and_panels(
     assert ">Cite first<" in page and ">PDF<" in page
     # Panels and the flagged-papers section come across too.
     assert '<span class="panel-title">Authors</span>' in page
-    assert '<span class="panel-title">Keywords &amp; topics</span>' in page
+    assert '<span class="panel-title">Keywords</span>' in page
     assert "Research requested citing" in page
     assert 'class="cite-first-row"' in page
     assert "Download .bib" not in page

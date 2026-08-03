@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{#- One topic. The picker below is the whole editing model: every keyword in the
+    library is a button, and one click moves it in or out of this topic. -#}
+{% block content %}
+<p class="sort"><a href="/topics">← All topics</a></p>
+<h1>{{ topic.name }}</h1>
+{% if topic.description %}<p class="topic-description">{{ topic.description }}</p>{% endif %}
+
+{% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+{% if saved %}<p class="saved-note">✓ Topic saved.</p>{% endif %}
+
+<section class="topic-editor">
+  <details{% if error %} open{% endif %}>
+    <summary><span class="panel-title">Rename or describe this topic</span></summary>
+    <form method="post" action="/topics/{{ topic.id }}" class="topic-form">
+      <label>Name
+        <input type="text" name="name" value="{{ topic.name }}" required autocomplete="off">
+      </label>
+      <label>Description <span class="subtle">(optional)</span>
+        <input type="text" name="description" value="{{ topic.description or '' }}" autocomplete="off">
+      </label>
+      <button type="submit">Save</button>
+    </form>
+    <form method="post" action="/topics/{{ topic.id }}/delete" class="topic-delete-form">
+      <button type="submit" class="btn danger"
+              title="Removes the grouping only — keywords and papers stay as they are">Delete topic</button>
+    </form>
+  </details>
+</section>
+
+<h2>Keywords in this topic <span class="count-badge">{{ topic.keywords | length }}</span></h2>
+{% if topic.keywords %}
+<form method="post" action="/topics/{{ topic.id }}/keywords" class="chips">
+  {% for keyword in topic.keywords %}
+  <button type="submit" name="keyword_id" value="{{ keyword.id }}"
+          class="chip chip-link chip-active"
+          title="Remove “{{ keyword.name }}” from {{ topic.name }}">{{ keyword.name }} ✕</button>
+  {% endfor %}
+</form>
+{% else %}
+<p>None yet. Click keywords below to classify them into this topic.</p>
+{% endif %}
+
+<h2>All keywords <span class="count-badge">{{ keyword_picker | length }}</span></h2>
+<p class="sort">
+  Click a keyword to put it in “{{ topic.name }}”; click a highlighted one to take
+  it out. A keyword may belong to several topics.
+</p>
+<p class="keyword-search">
+  <input type="search" id="js-keyword-filter" placeholder="Find a keyword&hellip;"
+         autocomplete="off" aria-label="Filter the keyword list">
+</p>
+<form method="post" action="/topics/{{ topic.id }}/keywords" class="chips keyword-picker">
+  {% for keyword, count in keyword_picker %}
+  {%- set is_assigned = keyword.id in assigned_ids -%}
+  <button type="submit" name="keyword_id" value="{{ keyword.id }}"
+          class="chip chip-link js-keyword-chip{% if is_assigned %} chip-active{% endif %}"
+          data-name="{{ keyword.name | lower }}"
+          title="{{ count }} paper{{ '' if count == 1 else 's' }} · {% if is_assigned %}click to remove from{% else %}click to add to{% endif %} {{ topic.name }}">{{ keyword.name }} <span class="chip-count">{{ count }}</span></button>
+  {% endfor %}
+</form>
+<p class="no-matches" id="js-keyword-empty" hidden>No keyword matches that text.</p>
+
+<h2>Papers in this topic <span class="count-badge">{{ articles | length }}</span></h2>
+{% if articles %}
+<table class="wide-table">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Authors</th>
+      <th>Published</th>
+      <th>Journal</th>
+      <th>Matching keywords</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for article in articles %}
+    <tr>
+      <td class="article-title-cell">
+        <a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a>
+      </td>
+      <td>
+        {%- for author in article.authors[:3] -%}
+          <a href="/authors/{{ author.id }}" title="{{ author.full_name }}">{{ author.full_name | short_name }}</a>{% if not loop.last %}, {% endif %}
+        {%- endfor -%}
+        {%- if article.authors | length > 3 %} et al.{% endif -%}
+      </td>
+      <td class="date-cell">{{ article.published_date or article.year or "" }}</td>
+      <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
+      <td>
+        <div class="chips">
+          {%- for keyword in article.keywords if keyword.id in assigned_ids -%}
+          <span class="chip">{{ keyword.name }}</span>
+          {%- endfor -%}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No papers yet — they appear here as soon as one of this topic's keywords is on a paper.</p>
+{% endif %}
+<script src="/static/topics.js" defer></script>
+{% endblock %}

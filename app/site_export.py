@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app import bibtex
 from app.affiliations import NCNR_LABEL, canonical_affiliation
-from app.models import Article, Author, Topic
+from app.models import Article, Author, Keyword, Topic
 from app.templating import templates
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -27,7 +27,7 @@ def _row(article: Article, key: str, entry: str) -> dict:
     pdf_path = Path(article.pdf_path) if article.pdf_path else None
     has_pdf = pdf_path is not None and pdf_path.is_file()
     # Free-text haystack for the page's search box, matching what the server-side
-    # FTS index covers (title, abstract, journal) plus authors, topics and the DOI.
+    # FTS index covers (title, abstract, journal) plus authors, keywords and the DOI.
     haystack = " ".join(
         part
         for part in (
@@ -36,6 +36,7 @@ def _row(article: Article, key: str, entry: str) -> dict:
             article.journal,
             article.doi,
             " ".join(author.full_name for author in article.authors),
+            " ".join(keyword.name for keyword in article.keywords),
             " ".join(topic.name for topic in article.topics),
         )
         if part
@@ -99,7 +100,22 @@ def _author_stats(rows: list[dict]) -> tuple[list, list]:
     )
 
 
+def _keyword_stats(rows: list[dict]) -> list[tuple[Keyword, int]]:
+    keywords: dict[int, Keyword] = {}
+    counts: dict[int, int] = {}
+    for row in rows:
+        for keyword in row["article"].keywords:
+            keywords[keyword.id] = keyword
+            counts[keyword.id] = counts.get(keyword.id, 0) + 1
+    return sorted(
+        ((keywords[i], counts[i]) for i in keywords),
+        key=lambda pair: (-pair[1], pair[0].name),
+    )
+
+
 def _topic_stats(rows: list[dict]) -> list[tuple[Topic, int]]:
+    """(topic, papers) over the selection. A paper counts once per topic however
+    many of that topic's keywords it carries."""
     topics: dict[int, Topic] = {}
     counts: dict[int, int] = {}
     for row in rows:
@@ -132,6 +148,7 @@ def _render_summary(
         ncnr_authors=ncnr_authors,
         other_authors=other_authors,
         author_total=len(ncnr_authors) + len(other_authors),
+        keyword_stats=_keyword_stats(rows),
         topic_stats=_topic_stats(rows),
         ncnr_label=NCNR_LABEL,
         style_css=(_STATIC_DIR / "style.css").read_text(encoding="utf-8"),

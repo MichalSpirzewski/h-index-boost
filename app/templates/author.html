@@ -5,7 +5,7 @@
   {%- set active = (sort == key) -%}
   {%- set next_order = "desc" if (active and order == "asc") else "asc" -%}
   <th class="sortable{% if active %} active{% endif %}">
-    <a href="/authors/{{ author.id }}?sort={{ key }}&order={{ next_order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
+    <a href="/authors/{{ author.id }}?sort={{ key }}&order={{ next_order }}{% if active_keyword %}&keyword={{ active_keyword.id }}{% endif %}">
       {{ label }}<span class="arrow">{% if active %}{{ "▲" if order == "asc" else "▼" }}{% endif %}</span>
     </a>
   </th>
@@ -45,8 +45,8 @@
 </section>
 {% endif %}
 
-{% if active_topic %}
-<h2>Publications tagged “{{ active_topic.name }}” ({{ articles | length }})</h2>
+{% if active_keyword %}
+<h2>Publications tagged “{{ active_keyword.name }}” ({{ articles | length }})</h2>
 <p class="sort"><a href="/authors/{{ author.id }}">← All publications</a> · click a column header to sort.</p>
 {% else %}
 <h2>Publications ({{ articles | length }})</h2>
@@ -54,7 +54,7 @@
 {% if articles %}
 {{ export.export_form_open() }}
 <input type="hidden" name="return_to"
-       value="/authors/{{ author.id }}?sort={{ sort }}&order={{ order }}{% if active_topic %}&topic={{ active_topic.id }}{% endif %}">
+       value="/authors/{{ author.id }}?sort={{ sort }}&order={{ order }}{% if active_keyword %}&keyword={{ active_keyword.id }}{% endif %}">
 {{ export.export_bar() }}
 <table class="wide-table">
   <colgroup>
@@ -129,14 +129,14 @@
 </ul>
 {% endif %}
 
-{% if topic_stats %}
-<h2>Topics <span class="count-badge">{{ topic_stats | length }}</span></h2>
+{% if keyword_stats %}
+<h2>Keywords <span class="count-badge">{{ keyword_stats | length }}</span></h2>
 <div class="chips">
-  {% for topic, count in topic_stats %}
-  {%- set is_active = active_topic and active_topic.id == topic.id -%}
+  {% for keyword, count in keyword_stats %}
+  {%- set is_active = active_keyword and active_keyword.id == keyword.id -%}
   <a class="chip chip-link{% if is_active %} chip-active{% endif %}"
-     href="{% if is_active %}/authors/{{ author.id }}{% else %}/authors/{{ author.id }}?topic={{ topic.id }}{% endif %}"
-     title="{% if is_active %}Clear filter{% else %}{{ count }} of this author’s papers tagged “{{ topic.name }}”{% endif %}">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>{% endfor %}
+     href="{% if is_active %}/authors/{{ author.id }}{% else %}/authors/{{ author.id }}?keyword={{ keyword.id }}{% endif %}"
+     title="{% if is_active %}Clear filter{% else %}{{ count }} of this author’s papers tagged “{{ keyword.name }}”{% endif %}">{{ keyword.name }} <span class="chip-count">{{ count }}</span></a>{% endfor %}
 </div>
 {% endif %}
 {% endblock %}

@@ -64,11 +64,24 @@
     {% if topic_stats %}
     <section class="authors-panel topics-panel">
       <details>
-        <summary><span class="panel-title">Keywords &amp; topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
+        <summary><span class="panel-title">Topics</span> <span class="count-badge">{{ topic_stats | length }}</span></summary>
         <div class="chips">
           {% for topic, count in topic_stats %}
-          <a class="chip chip-link js-topic-filter" href="#" data-topic="{{ topic.id }}"
-             title="{{ count }} paper{{ '' if count == 1 else 's' }} tagged “{{ topic.name }}”">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+          <a class="chip chip-link topic-chip js-topic-filter" href="#" data-topic="{{ topic.id }}"
+             title="{{ count }} paper{{ '' if count == 1 else 's' }} in “{{ topic.name }}”">{{ topic.name }} <span class="chip-count">{{ count }}</span></a>
+          {% endfor %}
+        </div>
+      </details>
+    </section>
+    {% endif %}
+    {% if keyword_stats %}
+    <section class="authors-panel topics-panel">
+      <details>
+        <summary><span class="panel-title">Keywords</span> <span class="count-badge">{{ keyword_stats | length }}</span></summary>
+        <div class="chips">
+          {% for keyword, count in keyword_stats %}
+          <a class="chip chip-link js-keyword-filter" href="#" data-keyword="{{ keyword.id }}"
+             title="{{ count }} paper{{ '' if count == 1 else 's' }} tagged “{{ keyword.name }}”">{{ keyword.name }} <span class="chip-count">{{ count }}</span></a>
           {% endfor %}
         </div>
       </details>
@@ -153,6 +166,7 @@
           data-search="{{ row.search }}"
           data-journal="{{ article.journal or '' }}"
           data-authors=" {% for author in authors %}{{ author.id }} {% endfor %}"
+          data-keywords=" {% for keyword in article.keywords %}{{ keyword.id }} {% endfor %}"
           data-topics=" {% for topic in article.topics %}{{ topic.id }} {% endfor %}"
           data-sort-title="{{ (article.title or article.doi or '') | lower }}"
           data-sort-author="{{ (authors[0].full_name.split() | last if authors and authors[0].full_name.split() else '') | lower }}"
@@ -163,10 +177,11 @@
         {% if hosted %}{{ export.select_td(article) }}{% endif %}
         <td class="article-title-cell">
           <a href="#" class="js-detail-toggle">{{ article.title or article.doi or "(untitled)" }}</a>
-          {% if article.topics %}
+          {% if article.topics or article.keywords %}
           <div class="chips">
-            {% for topic in article.topics[:5] %}<span class="chip">{{ topic.name }}</span>{% endfor %}
-            {% if article.topics | length > 5 %}<span class="chip">+{{ article.topics | length - 5 }}</span>{% endif %}
+            {% for topic in article.topics %}<span class="chip topic-chip">{{ topic.name }}</span>{% endfor %}
+            {% for keyword in article.keywords[:5] %}<span class="chip">{{ keyword.name }}</span>{% endfor %}
+            {% if article.keywords | length > 5 %}<span class="chip">+{{ article.keywords | length - 5 }}</span>{% endif %}
           </div>
           {% endif %}
         </td>
@@ -220,6 +235,7 @@
                 {% if article.published_date %}<dt>Published</dt><dd>{{ article.published_date }}{% if article.online_date and article.online_date != article.published_date %} <span class="subtle">(online {{ article.online_date }})</span>{% endif %}</dd>{% endif %}
                 {% if article.doi %}<dt>DOI</dt><dd><a href="https://doi.org/{{ article.doi }}" target="_blank" rel="noopener">{{ article.doi }}</a>{% if not hosted %} <span class="subtle">(needs a connection)</span>{% endif %}</dd>{% endif %}
                 {% if article.topics %}<dt>Topics</dt><dd>{% for topic in article.topics %}{{ topic.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+                {% if article.keywords %}<dt>Keywords</dt><dd>{% for keyword in article.keywords %}{{ keyword.name }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
                 {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
                 <dt>Cite key</dt><dd><code>{{ row.key }}</code></dd>
               </dl>

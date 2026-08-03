@@ -8,7 +8,7 @@ def _get_article(article_id: int):
     with db.SessionLocal() as session:
         article = session.get(Article, article_id)
         article.authors  # force-load before session closes
-        article.topics
+        article.keywords
         return article
 
 
@@ -28,7 +28,7 @@ def test_ingest_doi_runs_full_pipeline(client) -> None:
     assert article.abstract == "Quantum measurement & its 100% weird consequences."
     assert [a.full_name for a in article.authors] == ["Alice B. Smith", "Carol Danvers"]
     assert article.authors[0].orcid == "0000-0002-1825-0097"
-    assert [t.name for t in article.topics] == ["Physics and Astronomy"]
+    assert [k.name for k in article.keywords] == ["Physics and Astronomy"]
 
 
 def test_journal_ampersand_is_normalized_to_and(

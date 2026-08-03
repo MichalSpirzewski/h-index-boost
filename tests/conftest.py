@@ -27,13 +27,15 @@ def client(crossref_message, monkeypatch) -> TestClient:
     from app.models import (
         Article,
         ArticleAuthor,
-        ArticleTopic,
+        ArticleKeyword,
         Author,
+        Keyword,
         Project,
         ProjectDocument,
         SharedSelection,
         SharedSelectionArticle,
         Topic,
+        TopicKeyword,
     )
 
     db.init_db()
@@ -49,9 +51,11 @@ def client(crossref_message, monkeypatch) -> TestClient:
             SharedSelectionArticle,
             SharedSelection,
             ArticleAuthor,
-            ArticleTopic,
+            ArticleKeyword,
+            TopicKeyword,
             Article,
             Author,
+            Keyword,
             Topic,
         ):
             session.execute(delete(model))

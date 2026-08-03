@@ -43,18 +43,32 @@ Article
 Author
   id, full_name, orcid (nullable, UNIQUE when present)
 
+Keyword
+  id, name (UNIQUE)   -- from Crossref `subject` / S2 `fieldsOfStudy` / PDF keywords
+
 Topic
-  id, name (UNIQUE)   -- from Crossref `subject` / S2 `fieldsOfStudy` + manual tags
+  id, name (UNIQUE), description (nullable), created_at
+  -- a manually curated *group of keywords*, not a tag on a paper
 
 ArticleAuthor
   article_id, author_id, position (int)   -- author order matters for citations
 
-ArticleTopic
-  article_id, topic_id
+ArticleKeyword
+  article_id, keyword_id
+
+TopicKeyword
+  topic_id, keyword_id   -- a keyword may belong to several topics
 
 articles_fts (FTS5)
   title, abstract, journal — kept in sync via triggers or on write
 ```
+
+Keywords vs topics: keywords are whatever the sources supplied and are never merged
+or rewritten — that keeps them faithful but far too exclusive to browse (100+
+keywords for ~30 papers). Topics are the coarser layer maintained by hand: a topic
+holds keywords, and a paper is in a topic as long as one of its keywords is, so
+`Publication.topics` is derived from `Publication.keywords` rather than stored.
+Never link a paper to a topic directly.
 
 DOI normalization: lowercase, strip `https://doi.org/`, `http://dx.doi.org/`, `doi:` prefixes, trim whitespace. Apply everywhere a DOI enters the system.
 
@@ -77,16 +91,17 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 
 ## Pages / routes
 
-- `GET /` — dashboard: recent additions, top authors (article count), topic chips, search box (FTS5).
-- `GET /articles` — paginated table (50/page), filters: topic, author, year, full-text query. Row actions: view, download PDF, download BibTeX, select-checkbox.
+- `GET /` — dashboard: recent additions, top authors (article count), topic and keyword chips, search box (FTS5). `?keyword={id}` filters to one keyword, `?topic={id}` to every keyword in a topic.
+- `GET /articles` — paginated table (50/page), filters: topic, keyword, author, year, full-text query. Row actions: view, download PDF, download BibTeX, select-checkbox.
 - `POST /export/bibtex` — selected article ids → single merged `.bib` download. Also `GET /articles/{id}/bibtex` for one.
 - `POST /export/word-xml` — same selection → single `.xml` for Microsoft Word's Source Manager. Also `GET /articles/{id}/word-xml` for one.
 - `POST /export/site` — same selection → a ZIP holding a self-contained `summary.html` (a copy of the dashboard limited to the selection) and the available selected PDFs, all at the ZIP root. Built in `site_export.py`. CSS and JavaScript are embedded in the HTML, which supports offline sorting, filtering, and expandable paper details. BibTeX is shown in a foldable detail section; no standalone `.bib` or `.xml` is included.
 - `POST /shares` — persist the ordered selected article ids under an opaque bearer token; browser forms redirect to the new page and JSON clients receive its absolute URL.
 - `GET /shares/{token}` — a live RefBase-hosted version of the selected-publications summary. It shows only currently visible papers from that selection and supports copying the persistent link, sorting, filtering, expandable details, server PDF links, and foldable BibTeX. Anyone with the unguessable link can view it; there is no separate share authentication.
-- `GET /articles/{id}` — detail: metadata, authors, topics, abstract, PDF download, "added by".
-- `GET /authors/{id}` — author's articles, co-authors, topics.
-- `GET /topics/{id}` — articles + most active authors in the topic.
+- `GET /articles/{id}` — detail: metadata, authors, keywords, the topics they roll up into, abstract, PDF download, "added by".
+- `GET /authors/{id}` — author's articles, co-authors, keywords (`?keyword={id}` filters the table).
+- `GET /topics` + `POST /topics` — the topic overview (each topic's paper/keyword counts, plus the keywords in no topic yet) and topic creation. Names are UNIQUE; a clash is a 409 re-render, not a crash.
+- `GET /topics/{id}` — one topic: its papers, and a picker holding *every* keyword in the library. `POST /topics/{id}/keywords` with `keyword_id` toggles one keyword in or out — that single click is the whole classification UI. `POST /topics/{id}` renames/describes it, `POST /topics/{id}/delete` drops the grouping (keywords and papers survive).
 - `GET /upload` + `POST /api/ingest` — the hybrid upload form (file and/or link/DOI, optional "your name" remembered in localStorage and sent as `added_by`).
 - `POST /articles/{id}/hide` — soft delete. No hard deletes anywhere.
 
@@ -121,7 +136,7 @@ Word export: many people in the group write in Microsoft Word, not LaTeX. Word h
   tests/
   ```
 - Type hints everywhere; `ruff` for lint/format; `pytest` for tests.
-- Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping, JSON→Word XML field mapping (author name splitting, source-type mapping, well-formed output). Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
+- Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping, JSON→Word XML field mapping (author name splitting, source-type mapping, well-formed output), topic grouping (a paper counts once per topic however many of its keywords match) and the legacy topics→keywords table migration. Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
 - Keep external API calls isolated in `ingest.py` behind small functions so they're mockable.
 - No auth, no user table, no sessions. `added_by` is a plain string.
 - Don't add dependencies beyond the stack table without asking.

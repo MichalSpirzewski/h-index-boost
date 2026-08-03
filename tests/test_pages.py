@@ -56,11 +56,11 @@ def test_dashboard_sort_by_author(client, monkeypatch, crossref_message) -> None
     )
 
 
-def test_dashboard_filters_by_topic(client, monkeypatch, crossref_message) -> None:
+def test_dashboard_filters_by_keyword(client, monkeypatch, crossref_message) -> None:
     from sqlalchemy import select
 
     from app import db
-    from app.models import ArticleTopic, Topic
+    from app.models import ArticleKeyword, Keyword
 
     # Two papers tagged "Reactors", one tagged "Physics".
     def _ingest_with_subjects(doi, title, subjects):
@@ -80,14 +80,16 @@ def test_dashboard_filters_by_topic(client, monkeypatch, crossref_message) -> No
     _ingest_with_subjects("10.7777/c", "Physics Paper C", ["Physics"])
 
     with db.SessionLocal() as session:
-        reactors_id = session.scalar(select(Topic.id).where(Topic.name == "Reactors"))
+        reactors_id = session.scalar(select(Keyword.id).where(Keyword.name == "Reactors"))
         # sanity: 2 articles carry it
         tagged = session.scalars(
-            select(ArticleTopic.article_id).where(ArticleTopic.topic_id == reactors_id)
+            select(ArticleKeyword.article_id).where(
+                ArticleKeyword.keyword_id == reactors_id
+            )
         ).all()
         assert len(tagged) == 2
 
-    page = client.get(f"/?topic={reactors_id}").text
+    page = client.get(f"/?keyword={reactors_id}").text
     assert "Papers tagged" in page
     assert "Reactor Paper A" in page and "Reactor Paper B" in page
     assert "Physics Paper C" not in page  # filtered out
@@ -113,13 +115,15 @@ def test_author_page_lists_only_that_authors_articles(
     assert "Alex Other" not in page
 
 
-def test_author_page_filters_publications_by_topic(client, monkeypatch, crossref_message) -> None:
+def test_author_page_filters_publications_by_keyword(
+    client, monkeypatch, crossref_message
+) -> None:
     import copy
 
     from sqlalchemy import select
 
     from app import db, ingest
-    from app.models import Author, Topic
+    from app.models import Author, Keyword
 
     def _ingest(doi, title, subjects):
         message = copy.deepcopy(crossref_message)
@@ -135,14 +139,14 @@ def test_author_page_filters_publications_by_topic(client, monkeypatch, crossref
 
     with db.SessionLocal() as session:
         author_id = session.scalar(select(Author.id).where(Author.full_name == "Ada Kowalska"))
-        reactors_id = session.scalar(select(Topic.id).where(Topic.name == "Reactors"))
+        reactors_id = session.scalar(select(Keyword.id).where(Keyword.name == "Reactors"))
 
     # Unfiltered: both papers shown; the filter stays on the author page (not the dashboard).
     full = client.get(f"/authors/{author_id}").text
     assert "Reactor Study" in full and "Physics Study" in full
-    assert f'href="/authors/{author_id}?topic={reactors_id}"' in full
+    assert f'href="/authors/{author_id}?keyword={reactors_id}"' in full
 
-    filtered = client.get(f"/authors/{author_id}?topic={reactors_id}").text
+    filtered = client.get(f"/authors/{author_id}?keyword={reactors_id}").text
     assert "Publications tagged" in filtered
     assert "Reactor Study" in filtered
     assert "Physics Study" not in filtered  # filtered out, in-place
@@ -391,12 +395,12 @@ def test_dashboard_panels_are_collapsed_by_default(client, monkeypatch, crossref
     page = client.get("/").text
     # The Authors / Keywords panels fold; the table sections below them do not.
     # <details> with no `open` attribute renders folded.
-    for panel in ("Authors", "Keywords &amp; topics"):
+    for panel in ("Authors", "Keywords"):
         summary = page.index(f'<span class="panel-title">{panel}</span>')
         assert page.rindex("<details", 0, summary) == page.rindex("<details>", 0, summary)
 
 
-def test_dashboard_paper_has_foldable_abstract_beside_topics(
+def test_dashboard_paper_has_foldable_abstract_beside_keywords(
     client, monkeypatch, crossref_message
 ) -> None:
     _ingest_with_authors(
@@ -415,16 +419,16 @@ def test_dashboard_paper_has_foldable_abstract_beside_topics(
     assert "<details open" not in row
 
 
-def test_topic_panel_opens_when_a_topic_filter_is_active(
+def test_keyword_panel_opens_when_a_keyword_filter_is_active(
     client, monkeypatch, crossref_message
 ) -> None:
     _ingest_with_authors(client, monkeypatch, crossref_message, "10.9999/topicopen", ["Adams"])
     from app import db
-    from app.models import Topic
+    from app.models import Keyword
 
     with db.SessionLocal() as session:
-        topic_id = session.query(Topic).first().id
-    assert "<details open>" in client.get(f"/?topic={topic_id}").text
+        keyword_id = session.query(Keyword).first().id
+    assert "<details open>" in client.get(f"/?keyword={keyword_id}").text
 
 
 def test_dashboard_and_author_page_offer_multi_select_export(

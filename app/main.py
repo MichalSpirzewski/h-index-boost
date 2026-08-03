@@ -17,7 +17,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -35,16 +35,18 @@ from app.affiliations import NCNR_LABEL, NCNR_PHRASE, canonical_affiliation
 from app.models import (
     Article,
     ArticleAuthor,
-    ArticleTopic,
+    ArticleKeyword,
     Author,
     DeliverableDocument,
     JournalPublication,
+    Keyword,
     MilestoneDocument,
     Project,
     ProjectDocument,
     SharedSelection,
     SharedSelectionArticle,
     Topic,
+    TopicKeyword,
 )
 from app.templating import templates
 
@@ -282,6 +284,7 @@ def article_status(article_id: int, session: Session = Depends(db.get_db)):
         "status": article.status,
         "has_pdf": article.pdf_path is not None,
         "authors": [a.full_name for a in article.authors],
+        "keywords": [k.name for k in article.keywords],
         "topics": [t.name for t in article.topics],
     }
 
@@ -641,12 +644,74 @@ _SORT_COLUMNS = {
 _SORT_KEYS = set(_SORT_COLUMNS) | {"author"}
 
 
+# --------------------------------------------------------------------------- keywords & topics
+
+def _keyword_article_ids(keyword_id: int):
+    """Subquery: the articles carrying one keyword."""
+    return select(ArticleKeyword.article_id).where(
+        ArticleKeyword.keyword_id == keyword_id
+    )
+
+
+def _topic_article_ids(topic_id: int):
+    """Subquery: the articles carrying any keyword classified into one topic."""
+    return (
+        select(ArticleKeyword.article_id)
+        .join(TopicKeyword, TopicKeyword.keyword_id == ArticleKeyword.keyword_id)
+        .where(TopicKeyword.topic_id == topic_id)
+    )
+
+
+def _library_keyword_stats(session: Session) -> list:
+    """(keyword, papers) for every keyword in use, most-used first."""
+    paper_count = func.count(ArticleKeyword.article_id)
+    return list(
+        session.execute(
+            select(Keyword, paper_count)
+            .join(ArticleKeyword, ArticleKeyword.keyword_id == Keyword.id)
+            .join(Article, Article.id == ArticleKeyword.article_id)
+            .where(Article.hidden.is_(False))
+            .group_by(Keyword.id)
+            .order_by(paper_count.desc(), Keyword.name)
+        ).all()
+    )
+
+
+def _topic_stats(session: Session) -> list:
+    """(topic, papers, keywords) for every topic, newly created empty ones included.
+
+    A paper counts once per topic however many of that topic's keywords it
+    carries — collapsing that overlap is the point of the grouping.
+    """
+    paper_count = func.count(func.distinct(Article.id))
+    keyword_count = func.count(func.distinct(TopicKeyword.keyword_id))
+    return list(
+        session.execute(
+            select(Topic, paper_count, keyword_count)
+            .outerjoin(TopicKeyword, TopicKeyword.topic_id == Topic.id)
+            .outerjoin(
+                ArticleKeyword, ArticleKeyword.keyword_id == TopicKeyword.keyword_id
+            )
+            .outerjoin(
+                Article,
+                and_(
+                    Article.id == ArticleKeyword.article_id,
+                    Article.hidden.is_(False),
+                ),
+            )
+            .group_by(Topic.id)
+            .order_by(paper_count.desc(), Topic.name)
+        ).all()
+    )
+
+
 @app.get("/")
 def index(
     request: Request,
     session: Session = Depends(db.get_db),
     sort: str = "year",
     order: str = "",
+    keyword: int | None = None,
     topic: int | None = None,
 ):
     if sort not in _SORT_KEYS:
@@ -656,6 +721,7 @@ def index(
         order = "desc" if sort in ("recent", "year", "online") else "asc"
     descending = order == "desc"
 
+    active_keyword = session.get(Keyword, keyword) if keyword is not None else None
     active_topic = session.get(Topic, topic) if topic is not None else None
 
     query = (
@@ -663,13 +729,13 @@ def index(
         .where(Article.hidden.is_(False))
         .options(
             selectinload(Article.author_links).selectinload(ArticleAuthor.author),
-            selectinload(Article.topics),
+            selectinload(Article.keywords).selectinload(Keyword.topics),
         )
     )
-    if active_topic is not None:  # filter to papers carrying this keyword/topic
-        query = query.join(ArticleTopic, ArticleTopic.article_id == Article.id).where(
-            ArticleTopic.topic_id == active_topic.id
-        )
+    if active_keyword is not None:  # one exact keyword
+        query = query.where(Article.id.in_(_keyword_article_ids(active_keyword.id)))
+    if active_topic is not None:  # any keyword classified into this topic
+        query = query.where(Article.id.in_(_topic_article_ids(active_topic.id)))
     column = _SORT_COLUMNS.get(sort, Article.year)
     # Papers share a year (or a journal) constantly, so break ties on date added
     # instead of letting SQLite return them in whatever order it likes.
@@ -730,17 +796,6 @@ def index(
             meeting_links.append((author, meeting_link))
     meeting_links.sort(key=lambda pair: pair[0].full_name.casefold())
 
-    # Keywords/topics across the library + how many articles carry each.
-    topic_count = func.count(ArticleTopic.article_id)
-    topic_stats = session.execute(
-        select(Topic, topic_count)
-        .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
-        .join(Article, Article.id == ArticleTopic.article_id)
-        .where(Article.hidden.is_(False))
-        .group_by(Topic.id)
-        .order_by(topic_count.desc(), Topic.name)
-    ).all()
-
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -755,7 +810,11 @@ def index(
             "other_authors": other_authors,
             "meeting_links": meeting_links,
             "ncnr_label": NCNR_LABEL,
-            "topic_stats": topic_stats,
+            # Keywords across the library + how many articles carry each, and the
+            # curated topics they roll up into.
+            "keyword_stats": _library_keyword_stats(session),
+            "topic_stats": _topic_stats(session),
+            "active_keyword": active_keyword,
             "active_topic": active_topic,
         },
     )
@@ -767,6 +826,7 @@ def toggle_cite_first(
     session: Session = Depends(db.get_db),
     sort: str = Form("year"),
     order: str = Form(""),
+    keyword: int | None = Form(None),
     topic: int | None = Form(None),
     return_to: str | None = Form(None),
 ):
@@ -783,6 +843,8 @@ def toggle_cite_first(
         params["sort"] = sort
     if order:
         params["order"] = order
+    if keyword is not None:
+        params["keyword"] = keyword
     if topic is not None:
         params["topic"] = topic
     query = "&".join(f"{key}={value}" for key, value in params.items())
@@ -871,7 +933,7 @@ def author_detail(
     saved: int = 0,
     sort: str = "year",
     order: str = "",
-    topic: int | None = None,
+    keyword: int | None = None,
 ):
     author = session.get(Author, author_id)
     if author is None:
@@ -886,15 +948,15 @@ def author_detail(
             .where(ArticleAuthor.author_id == author_id, Article.hidden.is_(False))
             .options(
                 selectinload(Article.author_links).selectinload(ArticleAuthor.author),
-                selectinload(Article.topics),
+                selectinload(Article.keywords),
             )
             .order_by(Article.created_at.desc())
         )
     )
     co_authors: dict[int, Author] = {}
     joint_counts: dict[int, int] = {}
-    topics = {}
-    topic_counts: dict[int, int] = {}
+    keywords: dict[int, Keyword] = {}
+    keyword_counts: dict[int, int] = {}
     # Ordered de-dup of this author's affiliations, keyed so near-identical strings
     # (same text bar case/diacritics/punctuation — PDF encoding noise) collapse.
     affiliations: dict[str, str] = {}
@@ -912,20 +974,26 @@ def author_detail(
                         affiliations.setdefault(key, display)
                         if key == NCNR_PHRASE:
                             is_ncbj = True
-        for art_topic in article.topics:
-            topics[art_topic.id] = art_topic
-            topic_counts[art_topic.id] = topic_counts.get(art_topic.id, 0) + 1
+        for article_keyword in article.keywords:
+            keywords[article_keyword.id] = article_keyword
+            keyword_counts[article_keyword.id] = (
+                keyword_counts.get(article_keyword.id, 0) + 1
+            )
     # Most frequent collaborators first, then alphabetical.
     co_author_stats = sorted(
         ((co_authors[cid], joint_counts[cid]) for cid in co_authors),
         key=lambda pair: (-pair[1], pair[0].full_name),
     )
 
-    # Optional keyword/topic filter — narrows only the publications table below,
-    # leaving the co-author / affiliation / topic summaries computed over all papers.
-    active_topic = topics.get(topic) if topic is not None else None
-    if active_topic is not None:
-        articles = [a for a in articles if any(t.id == active_topic.id for t in a.topics)]
+    # Optional keyword filter — narrows only the publications table below, leaving
+    # the co-author / affiliation / keyword summaries computed over all papers.
+    active_keyword = keywords.get(keyword) if keyword is not None else None
+    if active_keyword is not None:
+        articles = [
+            article
+            for article in articles
+            if any(item.id == active_keyword.id for item in article.keywords)
+        ]
 
     # Sortable publications table (clickable headers). Default: newest published first.
     if sort not in _PUB_SORT_KEYS:
@@ -944,12 +1012,12 @@ def author_detail(
             "order": order,
             "co_author_stats": co_author_stats,
             "affiliations": list(affiliations.values()),
-            # (topic, count) pairs — most-used keyword first, then alphabetical.
-            "topic_stats": sorted(
-                ((topics[tid], topic_counts[tid]) for tid in topics),
+            # (keyword, count) pairs — most-used keyword first, then alphabetical.
+            "keyword_stats": sorted(
+                ((keywords[kid], keyword_counts[kid]) for kid in keywords),
                 key=lambda pair: (-pair[1], pair[0].name),
             ),
-            "active_topic": active_topic,
+            "active_keyword": active_keyword,
             "is_ncbj": is_ncbj,
             "contact": contacts.get(author.id) if is_ncbj else {},
             "contact_saved": bool(saved),
@@ -964,7 +1032,7 @@ def journal_detail(
     session: Session = Depends(db.get_db),
     sort: str = "year",
     order: str = "",
-    topic: int | None = None,
+    keyword: int | None = None,
 ):
     """List the library's publications from one journal."""
     articles = list(
@@ -973,7 +1041,7 @@ def journal_detail(
             .where(Article.journal == journal_name, Article.hidden.is_(False))
             .options(
                 selectinload(Article.author_links).selectinload(ArticleAuthor.author),
-                selectinload(Article.topics),
+                selectinload(Article.keywords),
             )
             .order_by(Article.created_at.desc())
         )
@@ -981,21 +1049,23 @@ def journal_detail(
     if not articles:
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    topics: dict[int, Topic] = {}
-    topic_counts: dict[int, int] = {}
+    keywords: dict[int, Keyword] = {}
+    keyword_counts: dict[int, int] = {}
     for article in articles:
-        for article_topic in article.topics:
-            topics[article_topic.id] = article_topic
-            topic_counts[article_topic.id] = topic_counts.get(article_topic.id, 0) + 1
+        for article_keyword in article.keywords:
+            keywords[article_keyword.id] = article_keyword
+            keyword_counts[article_keyword.id] = (
+                keyword_counts.get(article_keyword.id, 0) + 1
+            )
 
-    # As on the author page, filtering changes the table but leaves the topic
+    # As on the author page, filtering changes the table but leaves the keyword
     # summary based on all of this journal's publications.
-    active_topic = topics.get(topic) if topic is not None else None
-    if active_topic is not None:
+    active_keyword = keywords.get(keyword) if keyword is not None else None
+    if active_keyword is not None:
         articles = [
             article
             for article in articles
-            if any(item.id == active_topic.id for item in article.topics)
+            if any(item.id == active_keyword.id for item in article.keywords)
         ]
 
     if sort not in _PUB_SORT_KEYS:
@@ -1014,13 +1084,224 @@ def journal_detail(
             "articles": articles,
             "sort": sort,
             "order": order,
-            "topic_stats": sorted(
-                ((topics[topic_id], topic_counts[topic_id]) for topic_id in topics),
+            "keyword_stats": sorted(
+                (
+                    (keywords[keyword_id], keyword_counts[keyword_id])
+                    for keyword_id in keywords
+                ),
                 key=lambda pair: (-pair[1], pair[0].name),
             ),
-            "active_topic": active_topic,
+            "active_keyword": active_keyword,
         },
     )
+
+
+def _topic_or_404(session: Session, topic_id: int) -> Topic:
+    topic = session.scalar(
+        select(Topic).where(Topic.id == topic_id).options(selectinload(Topic.keywords))
+    )
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    return topic
+
+
+def _topics_page_context(
+    session: Session,
+    *,
+    error: str | None = None,
+    name: str = "",
+    description: str = "",
+) -> dict:
+    keyword_stats = _library_keyword_stats(session)
+    classified = set(session.scalars(select(TopicKeyword.keyword_id)))
+    return {
+        "topic_stats": _topic_stats(session),
+        # What is still waiting to be classified — the working list for whoever
+        # is building the topics up.
+        "unclassified": [
+            pair for pair in keyword_stats if pair[0].id not in classified
+        ],
+        "keyword_total": len(keyword_stats),
+        "error": error,
+        "name": name,
+        "description": description,
+    }
+
+
+@app.get("/topics")
+def topics_page(request: Request, session: Session = Depends(db.get_db)):
+    """The topic overview: every group, its size, and the leftover keywords."""
+    return templates.TemplateResponse(
+        request, "topics.html", _topics_page_context(session)
+    )
+
+
+@app.post("/topics")
+def create_topic(
+    request: Request,
+    name: str = Form(...),
+    description: str | None = Form(None),
+    session: Session = Depends(db.get_db),
+):
+    name = name.strip()
+    description = _clean(description)
+    if not name:
+        return templates.TemplateResponse(
+            request,
+            "topics.html",
+            _topics_page_context(
+                session, error="A topic needs a name.", description=description or ""
+            ),
+            status_code=422,
+        )
+    topic = Topic(name=name, description=description)
+    session.add(topic)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        return templates.TemplateResponse(
+            request,
+            "topics.html",
+            _topics_page_context(
+                session,
+                error=f"A topic called “{name}” already exists.",
+                name=name,
+                description=description or "",
+            ),
+            status_code=409,
+        )
+    return RedirectResponse(f"/topics/{topic.id}", status_code=303)
+
+
+def _topic_detail_context(
+    session: Session,
+    topic: Topic,
+    *,
+    error: str | None = None,
+    saved: bool = False,
+) -> dict:
+    assigned = {keyword.id for keyword in topic.keywords}
+    # Every keyword in the library is offered, so classifying one is a single
+    # click here rather than an edit on each paper.
+    picker = _library_keyword_stats(session)
+    listed = {keyword.id for keyword, _count in picker}
+    picker += [
+        (keyword, 0) for keyword in topic.keywords if keyword.id not in listed
+    ]
+    articles = list(
+        session.scalars(
+            select(Article)
+            .where(
+                Article.hidden.is_(False),
+                Article.id.in_(_topic_article_ids(topic.id)),
+            )
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+                selectinload(Article.keywords),
+            )
+            .order_by(Article.published_date.desc(), Article.created_at.desc())
+        )
+    )
+    return {
+        "topic": topic,
+        "articles": articles,
+        "keyword_picker": picker,
+        "assigned_ids": assigned,
+        "error": error,
+        "saved": saved,
+    }
+
+
+@app.get("/topics/{topic_id}")
+def topic_detail(
+    request: Request,
+    topic_id: int,
+    session: Session = Depends(db.get_db),
+    saved: int = 0,
+):
+    """One topic: its papers, and the keyword picker that defines it."""
+    topic = _topic_or_404(session, topic_id)
+    return templates.TemplateResponse(
+        request,
+        "topic_detail.html",
+        _topic_detail_context(session, topic, saved=bool(saved)),
+    )
+
+
+@app.post("/topics/{topic_id}")
+def update_topic(
+    request: Request,
+    topic_id: int,
+    name: str = Form(...),
+    description: str | None = Form(None),
+    session: Session = Depends(db.get_db),
+):
+    topic = _topic_or_404(session, topic_id)
+    name = name.strip()
+    if not name:
+        return templates.TemplateResponse(
+            request,
+            "topic_detail.html",
+            _topic_detail_context(session, topic, error="A topic needs a name."),
+            status_code=422,
+        )
+    topic.name = name
+    topic.description = _clean(description)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        topic = _topic_or_404(session, topic_id)
+        return templates.TemplateResponse(
+            request,
+            "topic_detail.html",
+            _topic_detail_context(
+                session, topic, error=f"Another topic is already called “{name}”."
+            ),
+            status_code=409,
+        )
+    return RedirectResponse(f"/topics/{topic_id}?saved=1", status_code=303)
+
+
+@app.post("/topics/{topic_id}/keywords")
+def toggle_topic_keyword(
+    request: Request,
+    topic_id: int,
+    keyword_id: int = Form(...),
+    session: Session = Depends(db.get_db),
+):
+    """Click a keyword in the topic's picker to classify it — or to take it out."""
+    topic = _topic_or_404(session, topic_id)
+    keyword = session.get(Keyword, keyword_id)
+    if keyword is None:
+        raise HTTPException(status_code=404, detail="Keyword not found")
+    link = session.get(TopicKeyword, {"topic_id": topic.id, "keyword_id": keyword.id})
+    if link is None:
+        session.add(TopicKeyword(topic_id=topic.id, keyword_id=keyword.id))
+        assigned = True
+    else:
+        session.delete(link)
+        assigned = False
+    session.commit()
+    if _wants_html(request):
+        return RedirectResponse(f"/topics/{topic_id}", status_code=303)
+    return {"topic_id": topic.id, "keyword_id": keyword.id, "assigned": assigned}
+
+
+@app.post("/topics/{topic_id}/delete")
+def delete_topic(
+    request: Request, topic_id: int, session: Session = Depends(db.get_db)
+):
+    """Drop a grouping. Keywords and papers are untouched — only the grouping goes."""
+    topic = _topic_or_404(session, topic_id)
+    # Deleting the topic drops its topic_keywords rows; the keywords themselves
+    # belong to the papers, not to the grouping.
+    session.delete(topic)
+    session.commit()
+    if _wants_html(request):
+        return RedirectResponse("/topics", status_code=303)
+    return {"deleted": topic_id}
 
 
 @app.post("/authors/{author_id}/contact")
@@ -1188,7 +1469,10 @@ def _articles_for_export(session: Session, ids: list[int]) -> list[Article]:
         for article in session.scalars(
             select(Article)
             .where(Article.id.in_(ids), Article.hidden.is_(False))
-            .options(selectinload(Article.author_links).selectinload(ArticleAuthor.author))
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author),
+                selectinload(Article.keywords).selectinload(Keyword.topics),
+            )
         )
     }
     articles = [found[i] for i in dict.fromkeys(ids) if i in found]
@@ -1261,7 +1545,7 @@ def shared_selection_page(
             .order_by(SharedSelectionArticle.position)
             .options(
                 selectinload(Article.author_links).selectinload(ArticleAuthor.author),
-                selectinload(Article.topics),
+                selectinload(Article.keywords).selectinload(Keyword.topics),
             )
         )
     )

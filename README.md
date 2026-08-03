@@ -14,6 +14,29 @@ Journal publications use the existing journal and publication-date metadata.
 Conference publications additionally support conference name, proceedings
 title, location, and start/end dates.
 
+## Keywords and topics
+
+Keywords are what the sources give: Crossref subjects, Semantic Scholar fields of
+study, and the "Keywords:" line of an uploaded PDF. They are stored verbatim and
+never merged, which makes them precise but too exclusive to browse — a small
+library easily carries more keywords than papers.
+
+Topics are the curated layer above them. Someone creates a topic at `/topics`,
+then clicks the keywords that belong to it; the page offers every keyword in the
+library, and one click classifies it. A paper belongs to a topic as long as one
+of its keywords does, so reclassifying a keyword moves every paper carrying it at
+once. A keyword may sit in several topics. Deleting a topic removes the grouping
+only — keywords and papers are untouched.
+
+The dashboard shows a Topics panel and a Keywords panel; `/?topic={id}` and
+`/?keyword={id}` filter the publication tables.
+
+Databases created before this split stored keywords in a table called `topics`;
+`init_db()` renames it (and `article_topics`) to `keywords`/`article_keywords` on
+startup and leaves `topics` to the new grouping model. The migration is
+idempotent and also recovers a database where the new tables were created empty
+before it landed.
+
 ## Project-document objects
 
 `ProjectDocument` is the base for non-publication files associated with a
