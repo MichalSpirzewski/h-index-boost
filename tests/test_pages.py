@@ -3,6 +3,17 @@ import io
 import zipfile
 
 
+def below_panels(page: str) -> str:
+    """The dashboard from its first heading down: the article tables.
+
+    The panels above it list library-wide author names and — in the Recent
+    additions panel — paper titles, so assertions about what the *tables* contain
+    and in which order have to start past them. The dashboard's only <h1> sits
+    between the two.
+    """
+    return page.split("<h1", 1)[-1]
+
+
 def _ingest_with_authors(client, monkeypatch, base_message, doi, families):
     """Ingest one article whose Crossref response has the given author families."""
     from app import ingest
@@ -91,8 +102,9 @@ def test_dashboard_filters_by_keyword(client, monkeypatch, crossref_message) -> 
 
     page = client.get(f"/?keyword={reactors_id}").text
     assert "Papers tagged" in page
-    assert "Reactor Paper A" in page and "Reactor Paper B" in page
-    assert "Physics Paper C" not in page  # filtered out
+    table = below_panels(page)
+    assert "Reactor Paper A" in table and "Reactor Paper B" in table
+    assert "Physics Paper C" not in table  # filtered out
 
 
 def test_author_page_lists_only_that_authors_articles(
@@ -400,6 +412,83 @@ def test_dashboard_panels_are_collapsed_by_default(client, monkeypatch, crossref
         assert page.rindex("<details", 0, summary) == page.rindex("<details>", 0, summary)
 
 
+def _recent_panel(page: str) -> str:
+    """Just the Recent additions panel's markup."""
+    start = page.index('<section class="authors-panel recent-panel">')
+    return page[start:page.index("</section>", start)]
+
+
+def _ingest_titled(client, monkeypatch, base_message, doi, title):
+    """Ingest one article with an explicit title, in call order."""
+    from app import ingest
+
+    message = copy.deepcopy(base_message)
+    message["DOI"] = doi
+    message["title"] = [title]
+    monkeypatch.setattr(ingest, "fetch_crossref", lambda _doi: message)
+    assert client.post("/api/ingest", data={"doi": doi}).json()["status"] == "created"
+
+
+def test_recent_additions_panel_lists_the_five_newest_first(
+    client, monkeypatch, crossref_message
+) -> None:
+    for i in range(7):
+        _ingest_titled(client, monkeypatch, crossref_message, f"10.9999/r{i}", f"Paper {i}")
+
+    panel = _recent_panel(client.get("/").text)
+    # In the order the panel prints them: newest added first, oldest two dropped.
+    listed = sorted(
+        (f"Paper {i}" for i in range(7) if f">Paper {i}<" in panel),
+        key=lambda title: panel.index(f">{title}<"),
+    )
+    assert listed == ["Paper 6", "Paper 5", "Paper 4", "Paper 3", "Paper 2"]
+    assert '<span class="count-badge">5</span>' in panel
+
+
+def test_recent_additions_panel_is_open_and_sits_below_meetings(
+    client, monkeypatch, crossref_message
+) -> None:
+    _ingest_titled(client, monkeypatch, crossref_message, "10.9999/one", "Only Paper")
+    page = client.get("/").text
+
+    assert page.index('class="authors-panel meetings-panel"') < page.index(
+        'class="authors-panel recent-panel"'
+    )
+    # Unlike the other panels this one is expanded: five entries are cheap to show.
+    panel = _recent_panel(page)
+    assert "<details open>" in panel
+    assert '<a class="recent-title" href="/articles/1">Only Paper</a>' in panel
+    assert 'href="/?sort=recent"' in panel  # link through to the full list
+
+
+def test_recent_additions_panel_ignores_filters_but_not_hiding(
+    client, monkeypatch, crossref_message
+) -> None:
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import Article, Keyword
+
+    for i, title in enumerate(("Kept Paper", "Hidden Paper")):
+        _ingest_titled(client, monkeypatch, crossref_message, f"10.9999/f{i}", title)
+    with db.SessionLocal() as session:
+        keyword_id = session.scalar(select(Keyword.id))
+        hidden = session.scalar(select(Article).where(Article.title == "Hidden Paper"))
+        hidden.hidden = True
+        session.commit()
+
+    # The panel reports the whole library, so a keyword filter must not narrow it.
+    panel = _recent_panel(client.get(f"/?keyword={keyword_id}").text)
+    assert "Kept Paper" in panel
+    assert "Hidden Paper" not in panel  # soft-deleted papers stay out
+
+
+def test_recent_additions_panel_is_empty_on_a_fresh_library(client) -> None:
+    panel = _recent_panel(client.get("/").text)
+    assert "Nothing in the library yet" in panel
+    assert '<span class="count-badge">0</span>' in panel
+
+
 def test_dashboard_paper_has_foldable_abstract_beside_keywords(
     client, monkeypatch, crossref_message
 ) -> None:
@@ -561,7 +650,8 @@ def test_dashboard_defaults_to_newest_published_not_newest_uploaded(
         _ingest_with_year(client, monkeypatch, crossref_message, f"10.9999/y{i}", year)
 
     page = client.get("/").text
-    positions = [page.index(f"Paper from {y}") for y in (2025, 2021, 2019)]
+    table = below_panels(page)
+    positions = [table.index(f"Paper from {y}") for y in (2025, 2021, 2019)]
     assert positions == sorted(positions), "expected newest publication first"
     assert "Latest publications" in page
 
@@ -573,7 +663,8 @@ def test_dashboard_can_still_sort_by_date_added(client, monkeypatch, crossref_me
     page = client.get("/?sort=recent").text
     assert "Recently added" in page
     # Last uploaded (2021) comes first, regardless of publication year.
-    positions = [page.index(f"Paper from {y}") for y in (2021, 2025, 2019)]
+    table = below_panels(page)
+    positions = [table.index(f"Paper from {y}") for y in (2021, 2025, 2019)]
     assert positions == sorted(positions)
 
 
@@ -603,8 +694,8 @@ def test_articles_without_a_year_sort_last_not_first(
     # A DOI-less stub never gets a year from Crossref.
     client.post("/api/ingest", data={"title": "Undated Stub Paper"})
 
-    page = client.get("/").text
-    assert page.index("Paper from 2020") < page.index("Undated Stub Paper")
+    table = below_panels(client.get("/").text)
+    assert table.index("Paper from 2020") < table.index("Undated Stub Paper")
 
 
 def _ingest_with_dates(client, monkeypatch, base_message, doi, issued, created=None):
@@ -626,8 +717,8 @@ def test_papers_from_one_year_order_by_month(client, monkeypatch, crossref_messa
     for i, issued in enumerate(([2026, 4], [2026, 12], [2026, 5])):
         _ingest_with_dates(client, monkeypatch, crossref_message, f"10.9999/m{i}", issued)
 
-    page = client.get("/").text
-    order = [page.index(f"Paper 2026-{m}") for m in (12, 5, 4)]
+    table = below_panels(client.get("/").text)
+    order = [table.index(f"Paper 2026-{m}") for m in (12, 5, 4)]
     assert order == sorted(order), "expected December before May before April"
 
 
@@ -651,9 +742,9 @@ def test_online_column_is_sortable_separately(client, monkeypatch, crossref_mess
         client, monkeypatch, crossref_message, "10.9999/o2", [2026, 4], [2026, 11, 3]
     )
     # By issue date the December paper leads; by online date the November one does.
-    by_issue = client.get("/").text
+    by_issue = below_panels(client.get("/").text)
     assert by_issue.index("Paper 2026-12") < by_issue.index("Paper 2026-4")
-    by_online = client.get("/?sort=online").text
+    by_online = below_panels(client.get("/?sort=online").text)
     assert by_online.index("Paper 2026-4") < by_online.index("Paper 2026-12")
 
 
@@ -724,8 +815,8 @@ def test_cite_first_papers_are_pinned_to_the_top(client, monkeypatch, crossref_m
     for i, year in enumerate((2026, 2020, 2015)):
         _ingest_with_dates(client, monkeypatch, crossref_message, f"10.9999/pin{i}", [year, 1])
 
-    page = client.get("/").text
-    assert page.index("Paper 2026-1") < page.index("Paper 2015-1")  # normal order
+    table = below_panels(client.get("/").text)
+    assert table.index("Paper 2026-1") < table.index("Paper 2015-1")  # normal order
 
     # Flag the oldest paper; it must jump above the newest.
     from sqlalchemy import select
@@ -737,8 +828,8 @@ def test_cite_first_papers_are_pinned_to_the_top(client, monkeypatch, crossref_m
         oldest_id = session.scalar(select(Article.id).where(Article.year == 2015))
     client.post(f"/articles/{oldest_id}/cite-first", data={"sort": "year", "order": "desc"})
 
-    page = client.get("/").text
-    assert page.index("Paper 2015-1") < page.index("Paper 2026-1")
+    table = below_panels(client.get("/").text)
+    assert table.index("Paper 2015-1") < table.index("Paper 2026-1")
 
 
 def test_pin_survives_every_sort_column(client, monkeypatch, crossref_message) -> None:
@@ -786,8 +877,9 @@ def test_two_foldable_tables_with_counts(client, monkeypatch, crossref_message) 
     assert '<span class="count-badge">1</span>' in cited_head
     all_head = page[page.index("All research"):]
     assert '<span class="count-badge">3</span>' in all_head
-    # Both sections are <details>, so both fold.
-    assert page.count("<details open>") == 2
+    # Both sections are <details>, so both fold. (Counted below the panels: the
+    # Recent additions panel is an open <details> of its own.)
+    assert below_panels(page).count("<details open>") == 2
 
 
 def test_each_table_gets_its_own_export_form(client, monkeypatch, crossref_message) -> None:

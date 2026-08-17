@@ -86,7 +86,9 @@ def test_topic_gathers_papers_from_all_its_keywords_counting_each_once(client) -
     for name in ("thermal hydraulics", "two-phase flow", "fuel cladding"):
         client.post(f"/topics/{topic_id}/keywords", data={"keyword_id": keywords[name]})
 
-    filtered = client.get(f"/?topic={topic_id}").text
+    # Scoped past the dashboard panels: Recent additions lists the whole library,
+    # filter or no filter, so only the table below is expected to narrow.
+    filtered = client.get(f"/?topic={topic_id}").text.split("<h1", 1)[-1]
     assert "Coolant Study" in filtered
     assert "Cladding Study" in filtered
     assert "Unrelated Study" not in filtered
