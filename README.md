@@ -59,6 +59,85 @@ belongs to a different existing workspace, the document is automatically
 attributed to that project. Parsed PDF text is retained for future full-text
 search; incomplete extraction is surfaced as parsing notes on the project page.
 
+## Duplicates and soft delete
+
+A paper's DOI is what makes it unique, so a paper that has none — no DOI in the
+PDF, none registered — could be uploaded any number of times and produce a new
+record each time. Every stored PDF therefore carries a `pdf_sha256` of its bytes,
+and an upload whose file is already in the library takes the same "already in
+library, here it is" path a duplicate DOI takes: HTTP 200 and a link, never an
+error. Notes:
+
+- DOI resolution runs first, so handing a DOI to a file already stored still
+  enriches that record instead of being turned away.
+- The lookup ignores hidden records — their links 404, and re-adding a paper
+  someone removed is a legitimate thing to do.
+- It catches byte-identical files, which is the common accident (one file, three
+  uploads). A fresh download of the same article from the publisher can differ in
+  its trailer and will still get through; the fuzzy title warning is the backstop
+  there.
+- The column is indexed but deliberately **not** unique: copies already in a
+  library share a hash, as do hidden ones.
+
+`POST /articles/{id}/hide` removes a record from every listing — dashboard,
+tables, search, author, journal and topic pages, exports — and `/articles/{id}`
+then 404s. Nothing is deleted: the PDF, metadata and keyword links stay, so
+`GET /hidden` can list what has been put away and restore any of it in one click
+via `POST /articles/{id}/unhide`. The dashboard shows a `Hidden (n)` link only
+while something is in there.
+
+## Reading a paper's front page
+
+A PDF with no DOI is the only source of its own metadata, and TeX-produced journal
+articles leave the PDF metadata title empty — such uploads used to land with no
+title and nobody credited. The parser therefore reads page 1's *layout* rather
+than its flat text:
+
+- **Title** — the first run of lines set in the largest face on the page, however
+  many lines it wraps onto, skipping mastheads ("Open Access Journal", homepage
+  URLs) that are sometimes set just as large.
+- **Authors** — the byline directly under the title, with superscript spans
+  dropped. This matters because flat text extraction fuses an affiliation marker
+  onto the surname in front of it: `Maciej Skrzypek` + superscript `a` comes back
+  as `Maciej Skrzypeka`. The layout keeps the marker in its own, smaller,
+  superscript-flagged span, so the names come out clean.
+- **Journal** — the running head above the title, cut at the citation apparatus
+  that identifies it as one: `Journal of Power Technologies 94 (Nuclear Issue)
+  (2014) 41–50` → `Journal of Power Technologies`, `Energies 2023, 16, 4567` →
+  `Energies`. A masthead line carrying no volume/year/pages is left alone rather
+  than guessed at, and mastheads that are noise (homepage URLs, `Open Access`,
+  `Received …`, copyright lines) are skipped.
+- **Keywords** — a `Keywords:` line that ends in a separator is treated as broken
+  by the column width and continues onto the line below.
+
+Authors are only created from the PDF for a record with no DOI and no stored
+Crossref message; where Crossref has a byline it owns it, including the order.
+The same holds for the title and journal: the PDF only fills what is still empty.
+All of it is backfilled by the "Rescan stored PDF" button, so records ingested
+before this existed can be filled in without re-uploading.
+
+Not parsed from the running head yet: the volume, issue, page range and year that
+sit beside the journal name. A record with no year still exports as `@misc` with
+an `nd` cite key.
+
+## Replacing a publication's PDF
+
+The article page accepts a new PDF for a record that already has one (or a first
+PDF for one that never got any) and re-parses it: full text for search, author
+keywords, the abstract, and per-author affiliations. A DOI-less record also
+adopts a DOI printed in the new file and then fetches its Crossref metadata; if
+another record already holds that DOI, the page says so and the record is left
+without one rather than stealing it.
+
+Re-parsing only rewrites what the *replaced* PDF contributed. The outgoing file
+is parsed once more before it is dropped, and an abstract or affiliation is
+refreshed only where the stored value matches what that file yielded — anything
+Crossref supplied survives untouched. Keywords are only ever added, never
+removed, because they are curated into topics by hand.
+
+Uploads are checked for the `%PDF` signature and a 50 MB ceiling before anything
+is written, so a mis-picked file cannot overwrite a good one.
+
 ## Metadata API
 
 Versioned JSON endpoints are available under `/api/v1`:

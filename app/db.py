@@ -111,6 +111,16 @@ def init_db() -> None:
         article_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(articles)"))]
         if article_cols and "pdf_text" not in article_cols:
             conn.execute(text("ALTER TABLE articles ADD COLUMN pdf_text TEXT"))
+        if article_cols and "pdf_sha256" not in article_cols:
+            conn.execute(text("ALTER TABLE articles ADD COLUMN pdf_sha256 VARCHAR(64)"))
+        # Deliberately not UNIQUE: records already duplicated in a library share a
+        # hash, and hidden copies keep theirs.
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_articles_pdf_sha256 "
+                "ON articles(pdf_sha256)"
+            )
+        )
         if article_cols and "cite_first" not in article_cols:
             conn.execute(
                 text("ALTER TABLE articles ADD COLUMN cite_first BOOLEAN DEFAULT 0")

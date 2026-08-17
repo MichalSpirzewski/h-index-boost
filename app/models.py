@@ -53,6 +53,11 @@ class Publication(Base):
     crossref_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # SHA-256 of the stored PDF's bytes: catches the same file being uploaded twice
+    # when the paper carries no DOI, which is the only hard duplicate guard there is.
+    # Indexed, not UNIQUE — copies already in the library share a hash, and a merged
+    # or hidden record keeps its own.
+    pdf_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     added_by: Mapped[str | None] = mapped_column(String, nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")  # pending/ready/metadata_failed

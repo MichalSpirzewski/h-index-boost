@@ -4,6 +4,7 @@ External API calls are isolated in small module-level functions (fetch_crossref,
 fetch_semantic_scholar, fetch_unpaywall, download_pdf) so tests can monkeypatch them.
 """
 
+import hashlib
 import html
 import json
 import os
@@ -11,6 +12,7 @@ import re
 import unicodedata
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -87,12 +89,200 @@ def extract_doi_from_pdf(pdf_bytes: bytes) -> str | None:
 
 
 def pdf_title(pdf_bytes: bytes) -> str | None:
+    """The paper's title: the PDF metadata field, else the front page's own typography."""
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             title = (doc.metadata.get("title") or "").strip()
-            return title or None
     except Exception:
         return None
+    # TeX-produced PDFs (and plenty of publisher ones) leave the metadata title
+    # empty, which is how DOI-less uploads end up stored with no title at all.
+    return title or extract_title_from_pdf(pdf_bytes)
+
+
+# --------------------------------------------------------------------------- front-page layout
+
+# Flat text extraction glues affiliation markers onto the words they follow —
+# "Maciej Skrzypek" + superscript "a" comes back as "Maciej Skrzypeka". The
+# layout dict keeps them apart: markers are their own spans, flagged superscript
+# and set several points smaller than the byline. Reading the spans instead of
+# the text is what makes the title and the author list recoverable.
+_SUPERSCRIPT_FLAG = 1  # PyMuPDF span flag bit 0
+_SUPERSCRIPT_SIZE_DROP = 1.0  # pt below the line's own size ⇒ treat as a marker
+
+
+def _first_page_lines(pdf_bytes: bytes) -> list[dict]:
+    """Layout lines of page 1, in reading order (empty when the PDF won't open)."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            if doc.page_count == 0:
+                return []
+            return [
+                line
+                for block in doc[0].get_text("dict")["blocks"]
+                if block.get("type") == 0  # 0 = text, 1 = image
+                for line in block.get("lines", [])
+            ]
+    except Exception:
+        return []
+
+
+def _spans(line: dict) -> list[dict]:
+    return [span for span in line.get("spans", []) if span["text"].strip()]
+
+
+def _line_size(line: dict) -> float:
+    return max((span["size"] for span in _spans(line)), default=0.0)
+
+
+def _line_text(line: dict, *, drop_markers: bool = False) -> str:
+    """One line's text. `drop_markers` discards superscript spans (∗, a, b, 1)."""
+    spans = _spans(line)
+    if drop_markers and spans:
+        size = max(span["size"] for span in spans)
+        spans = [
+            span
+            for span in spans
+            if not span["flags"] & _SUPERSCRIPT_FLAG
+            and span["size"] > size - _SUPERSCRIPT_SIZE_DROP
+        ]
+    # Spans carry their own leading/trailing spaces, so they butt together.
+    return re.sub(r"\s{2,}", " ", "".join(span["text"] for span in spans)).strip()
+
+
+_MIN_TITLE_LEN = 15
+_MAX_TITLE_LEN = 300
+# Mastheads and running heads can be set as large as the title; none of them are one.
+# Front matter that shares the masthead with the journal line and is sometimes set
+# as large as the title: neither a title nor a journal name.
+_MASTHEAD_NOISE_RE = re.compile(
+    r"^(open access|journal homepage|homepage|https?:|www\.|doi\b|vol\.|volume\b"
+    r"|issue\b|issn|isbn|received\b|revised\b|accepted\b|published\b|available\b"
+    r"|downloaded\b|copyright\b|©|article\b|preprint\b|page\b)",
+    re.IGNORECASE,
+)
+
+
+def _title_lines(lines: list[dict]) -> tuple[list[str], int, int]:
+    """The largest-face run of lines on page 1, and the span of indices it covers.
+
+    Publishers set the title larger than everything around it — masthead above,
+    byline below — so the first run at the page's largest size is the title,
+    however many lines it wraps onto. Indices are into the non-empty lines: what
+    precedes the run is the masthead, what follows it opens the byline.
+    """
+    sized = [(line, _line_size(line)) for line in lines if _line_text(line)]
+    if not sized:
+        return [], 0, 0
+    largest = max(size for _line, size in sized)
+    collected: list[str] = []
+    start = end = 0
+    for index, (line, size) in enumerate(sized):
+        text = _line_text(line)
+        if abs(size - largest) < 0.5 and not _MASTHEAD_NOISE_RE.match(text):
+            if not collected:
+                start = index
+            collected.append(text)
+            end = index + 1
+        elif collected:
+            break  # the run is over; a same-size heading further down is not the title
+    return collected, start, end
+
+
+def extract_title_from_pdf(pdf_bytes: bytes) -> str | None:
+    """Best-effort title from the front page's typography."""
+    collected, _start, _end = _title_lines(_first_page_lines(pdf_bytes))
+    title = " ".join(collected).strip()
+    if not _MIN_TITLE_LEN <= len(title) <= _MAX_TITLE_LEN:
+        return None
+    return title
+
+
+_MIN_JOURNAL_LEN = 6
+_MAX_JOURNAL_LEN = 120
+# The volume/year/page apparatus trailing a journal name in a running head: the
+# first standalone number, bare ("… Technologies 94"), parenthesised ("… (2014)")
+# or comma-led ("Energies 2023, 16").
+_JOURNAL_TAIL_RE = re.compile(r"[\s,;]+\(?\d")
+# What is left has to read as a name — letters and ordinary title punctuation.
+_JOURNAL_NAME_RE = re.compile(r"^[^\W\d_][\w\s&:\-—–'’.()/]*$", re.UNICODE)
+
+
+def extract_journal_from_pdf(pdf_bytes: bytes) -> str | None:
+    """The journal name from the running head printed above the title.
+
+    Publishers head page 1 with a citation line — "Journal of Power Technologies
+    94 (Nuclear Issue) (2014) 41–50", "Nuclear Engineering and Design 380 (2021)
+    111234", "Energies 2023, 16, 4567" — whose leading text is the journal and
+    whose volume/issue/year/pages identify it as that kind of line. A masthead
+    carrying no such numbers is left alone rather than guessed at.
+    """
+    lines = _first_page_lines(pdf_bytes)
+    _title, title_start, _end = _title_lines(lines)
+    texts = [text for text in (_line_text(line) for line in lines) if text]
+    for text in texts[:title_start]:
+        if _MASTHEAD_NOISE_RE.match(text):
+            continue
+        tail = _JOURNAL_TAIL_RE.search(text)
+        if tail is None:
+            continue
+        name = normalize_journal_name(text[: tail.start()].strip(" ,;.-"))
+        if _MIN_JOURNAL_LEN <= len(name) <= _MAX_JOURNAL_LEN and _JOURNAL_NAME_RE.match(name):
+            return name
+    return None
+
+
+_MAX_PDF_AUTHORS = 40
+_MAX_BYLINE_LINES = 3
+_AUTHOR_SPLIT_RE = re.compile(r",|;| and | & ", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"\S+@\S+")
+# Marker glyphs and stray digits that survive alongside a name.
+_AUTHOR_NOISE_RE = re.compile(r"[∗*†‡§¶#0-9]+")
+
+
+def _clean_author_name(raw: str) -> str | None:
+    name = re.sub(r"\s{2,}", " ", _AUTHOR_NOISE_RE.sub("", raw)).strip(" ,.;:-")
+    tokens = name.split()
+    # Two to five tokens, opening and closing with a capital: enough to keep
+    # "van der Meer" while rejecting leftover markers and "Corresponding author".
+    if not 2 <= len(tokens) <= 5 or not 4 <= len(name) <= 80:
+        return None
+    if not (tokens[0][:1].isupper() and tokens[-1][:1].isupper()):
+        return None
+    return name
+
+
+def extract_authors_from_pdf(pdf_bytes: bytes) -> list[str]:
+    """Author names from the byline under the title.
+
+    For papers Crossref has no record of, this is the only place an author list
+    can come from. It reads the byline's spans rather than its text so that the
+    superscript affiliation markers drop out instead of fusing onto surnames.
+    """
+    lines = _first_page_lines(pdf_bytes)
+    _title, _start, start = _title_lines(lines)
+    if not start:
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in [line for line in lines if _line_text(line)][start:][:_MAX_BYLINE_LINES]:
+        text = _line_text(line)
+        # The byline ends where the affiliations, the abstract or a contact address begins.
+        if (
+            _AFF_KEYWORD_RE.search(text)
+            or _AFF_BOUNDARY_RE.match(text)
+            or _EMAIL_RE.search(text)
+        ):
+            break
+        for candidate in _AUTHOR_SPLIT_RE.split(_line_text(line, drop_markers=True)):
+            name = _clean_author_name(candidate)
+            if name and author_name_key(name) not in seen:
+                seen.add(author_name_key(name))
+                names.append(name)
+        if names:  # a byline that produced names does not continue past its line
+            break
+    return names[:_MAX_PDF_AUTHORS]
 
 
 _MAX_PDF_TEXT = 500_000  # chars; keeps the FTS index bounded for scanned monsters
@@ -166,6 +356,8 @@ _KEYWORD_BLOCK_END_RE = re.compile(
 _MAX_KEYWORDS = 10
 _MAX_KEYWORD_LEN = 60
 _MAX_KEYWORD_LINES = 12
+# A keyword line ending in a separator has been broken by the column width.
+_KEYWORD_CONTINUES = (",", ";", "·", "•")
 
 
 def split_keywords(raw: str) -> list[str]:
@@ -190,7 +382,21 @@ def keywords_after_label(text: str) -> list[str]:
         return []
     inline = match.group(1).strip()
     if inline:
-        return split_keywords(inline)
+        # A trailing separator means the list ran past the width of the line and
+        # continues below — anything else means it finished where it started.
+        if not inline.endswith(_KEYWORD_CONTINUES):
+            return split_keywords(inline)
+        collected = [inline]
+        for line in text[match.end():].splitlines()[:_MAX_KEYWORD_LINES]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if _KEYWORD_BLOCK_END_RE.match(stripped):
+                break
+            collected.append(stripped)
+            if not stripped.endswith(_KEYWORD_CONTINUES):
+                break  # this line closed the list
+        return split_keywords("\n".join(collected))
     # Nothing on the label's own line: read the vertical list underneath it. The
     # per-keyword length cap in split_keywords discards prose if we overshoot.
     collected: list[str] = []
@@ -241,9 +447,15 @@ _AFF_KEYWORD_RE = re.compile(
     r"|Cent(?:re|er)s?\b)",
     re.IGNORECASE,
 )
-# An affiliation line prefixed by a superscript marker, e.g. "a National Centre…"
-# or "1. Warsaw University…". Group 1 = marker, group 2 = affiliation text.
-_MARKED_AFF_RE = re.compile(r"^\s*([a-z]|\d{1,2})[\s.,)]+(.+)$", re.IGNORECASE)
+# An affiliation line prefixed by a superscript marker, e.g. "a National Centre…",
+# "1. Warsaw University…" or — when text extraction fuses the superscript onto the
+# word behind it — "aInstitute of Heat Engineering…". Group 1 = marker, group 2 =
+# affiliation text.
+#
+# Letter markers must be lowercase, which is how they are typeset and what keeps
+# "A. Sołtana 7, 05-400, Otwock" (a street address continuing the affiliation
+# above) from being read as marker "a" pointing at a new institution.
+_MARKED_AFF_RE = re.compile(r"^\s*([a-z]|\d{1,2})(?:[\s.,)]+|(?=[A-Z]))(.+)$")
 # Where the author/affiliation block ends (section headings, copyright, DOI line).
 _AFF_BOUNDARY_RE = re.compile(
     r"^(a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|a\s*r\s*t\s*i\s*c\s*l\s*e|keywords?|highlights?"
@@ -409,6 +621,66 @@ def save_pdf(pdf_bytes: bytes, doi: str | None) -> str:
     path = db.PDF_DIR / f"{name}.pdf"
     path.write_bytes(pdf_bytes)
     return str(path)
+
+
+def pdf_sha256(pdf_bytes: bytes) -> str:
+    """Content fingerprint of an uploaded PDF."""
+    return hashlib.sha256(pdf_bytes).hexdigest()
+
+
+def find_by_pdf_hash(session: Session, pdf_bytes: bytes) -> Article | None:
+    """A visible article already holding this exact file, if there is one.
+
+    The paper's DOI is the primary duplicate guard, but a paper without one — no
+    DOI in the text, none registered — has nothing to be unique on, so the same
+    PDF can be uploaded any number of times. Hashing the bytes closes that.
+
+    Hidden records are ignored on purpose: pointing an uploader at a soft-deleted
+    article would hand them a link that 404s, and re-adding a paper somebody
+    removed is a legitimate thing to do.
+    """
+    return session.scalar(
+        select(Article)
+        .where(
+            Article.pdf_sha256 == pdf_sha256(pdf_bytes),
+            Article.hidden.is_(False),
+        )
+        .order_by(Article.id)
+    )
+
+
+def backfill_pdf_hashes(session: Session) -> int:
+    """Fingerprint PDFs stored before the column existed. Returns rows filled.
+
+    Reads each file once and then never again — unlike the affiliation backfills,
+    a row whose file is on disk always ends up with a hash, so the work does not
+    repeat on the next startup.
+    """
+    stale = session.scalars(
+        select(Article).where(
+            Article.pdf_path.is_not(None), Article.pdf_sha256.is_(None)
+        )
+    ).all()
+    filled = 0
+    for article in stale:
+        pdf_bytes = read_stored_pdf(article.pdf_path)
+        if pdf_bytes is None:
+            continue
+        article.pdf_sha256 = pdf_sha256(pdf_bytes)
+        filled += 1
+    if filled:
+        session.commit()
+    return filled
+
+
+def read_stored_pdf(pdf_path: str | None) -> bytes | None:
+    """Bytes of a stored PDF, or None when the row has no path or the file is gone."""
+    if not pdf_path:
+        return None
+    try:
+        return Path(pdf_path).read_bytes()
+    except OSError:
+        return None
 
 
 # --------------------------------------------------------------------------- external APIs
@@ -959,8 +1231,8 @@ def _link_keyword(session: Session, article: Article, name: str) -> None:
 def apply_semantic_scholar(session: Session, article: Article, data: dict[str, Any]) -> None:
     if not article.abstract and data.get("abstract"):
         article.abstract = data["abstract"]
-    for field in data.get("fieldsOfStudy") or []:
-        _link_keyword(session, article, field)
+    for study_field in data.get("fieldsOfStudy") or []:
+        _link_keyword(session, article, study_field)
 
 
 def add_pdf_keywords(session: Session, article: Article, pdf_bytes: bytes) -> list[str]:
@@ -991,9 +1263,8 @@ def apply_pdf_affiliations(session: Session, article: Article) -> int:
     )
     if not links or all(link.affiliation for link in links):
         return 0
-    try:
-        pdf_bytes = Path(article.pdf_path).read_bytes()
-    except OSError:
+    pdf_bytes = read_stored_pdf(article.pdf_path)
+    if pdf_bytes is None:
         return 0
 
     names = [session.get(Author, link.author_id).full_name for link in links]
@@ -1031,9 +1302,8 @@ def repair_shared_pdf_affiliations(session: Session) -> int:
         shared = next(iter(stored), "")
         if "; " not in shared:
             continue
-        try:
-            pdf_bytes = Path(article.pdf_path or "").read_bytes()
-        except OSError:
+        pdf_bytes = read_stored_pdf(article.pdf_path)
+        if pdf_bytes is None:
             continue
         parsed = extract_author_affiliations(
             pdf_bytes, [link.author.full_name for link in links]
@@ -1081,29 +1351,149 @@ def _backfill_abstract(article: Article, pdf_bytes: bytes) -> None:
         article.abstract = abstract
 
 
+def backfill_pdf_header(session: Session, article: Article, pdf_bytes: bytes) -> None:
+    """Fill a missing title, journal and author list from the PDF's front page.
+
+    All three are read from the page's typography (see `extract_title_from_pdf`),
+    which is the only source for a paper Crossref has no record of — a TeX-produced
+    PDF typically leaves the metadata title empty, so such uploads land titleless
+    and with nobody credited.
+
+    Authors are only created for a record with no DOI and no stored Crossref
+    message. Where one exists it owns the author list and its order, and
+    `apply_crossref` rebuilds the links from scratch on every fetch.
+    """
+    if not article.title:
+        title = extract_title_from_pdf(pdf_bytes)
+        if title:
+            article.title = title
+
+    if not article.journal:
+        journal = extract_journal_from_pdf(pdf_bytes)
+        if journal:
+            article.journal = journal
+
+    if article.doi or article.crossref_json or article.author_links:
+        return
+    seen: set[int] = set()
+    position = 0
+    for name in extract_authors_from_pdf(pdf_bytes):
+        author = _get_or_create_author(session, name, None)
+        if author.id in seen:
+            continue
+        seen.add(author.id)
+        session.add(
+            ArticleAuthor(
+                article_id=article.id, author_id=author.id, position=position
+            )
+        )
+        position += 1
+
+
 def attach_pdf(session: Session, article: Article, pdf_bytes: bytes) -> None:
     """Store a PDF for an article: file on disk, full text for search, keywords as topics."""
     article.pdf_path = save_pdf(pdf_bytes, article.doi)
+    article.pdf_sha256 = pdf_sha256(pdf_bytes)
     article.pdf_text = extract_pdf_text(pdf_bytes)
     _backfill_abstract(article, pdf_bytes)
+    backfill_pdf_header(session, article, pdf_bytes)
     session.commit()
     add_pdf_keywords(session, article, pdf_bytes)
+    apply_pdf_affiliations(session, article)
 
 
 def rescan_article_pdf(session: Session, article: Article) -> list[str]:
     """Re-run the scrub on an already-stored PDF: refresh full text, link keywords."""
-    if not article.pdf_path:
-        return []
-    try:
-        pdf_bytes = Path(article.pdf_path).read_bytes()
-    except OSError:
+    pdf_bytes = read_stored_pdf(article.pdf_path)
+    if pdf_bytes is None:
         return []
     article.pdf_text = extract_pdf_text(pdf_bytes)
     _backfill_abstract(article, pdf_bytes)
+    backfill_pdf_header(session, article, pdf_bytes)
     session.commit()
     keywords = add_pdf_keywords(session, article, pdf_bytes)
     apply_pdf_affiliations(session, article)
     return keywords
+
+
+@dataclass
+class PdfReplacement:
+    """What swapping a new PDF into an existing record re-derived."""
+
+    keywords: list[str] = field(default_factory=list)
+    abstract_updated: bool = False
+    affiliations_filled: int = 0
+    doi_adopted: str | None = None
+    conflicting_article_id: int | None = None
+
+
+def replace_pdf(session: Session, article: Article, pdf_bytes: bytes) -> PdfReplacement:
+    """Store a new PDF for `article` and re-parse the metadata the old one gave.
+
+    Only what the superseded file wrote is rewritten: an abstract or affiliation
+    that came from Crossref survives, while one parsed out of the replaced PDF is
+    re-derived from the new file. That provenance is worked out by re-parsing the
+    outgoing PDF and comparing — the columns don't record where a value came from.
+
+    Keywords are only ever added. They are curated into topics by hand, so dropping
+    the ones the old file contributed would silently unpick that classification.
+
+    A record with no DOI adopts one found in the new PDF, unless another article
+    already holds it (reported back instead, since the column is UNIQUE). The
+    caller is responsible for queueing `process_article` when that happens.
+    """
+    result = PdfReplacement()
+    previous_path = article.pdf_path
+    links = session.scalars(
+        select(ArticleAuthor)
+        .where(ArticleAuthor.article_id == article.id)
+        .order_by(ArticleAuthor.position)
+    ).all()
+
+    old_bytes = read_stored_pdf(previous_path)
+    old_abstract = extract_abstract_from_pdf(old_bytes) if old_bytes else None
+    old_affiliations: list[str | None] = (
+        extract_author_affiliations(old_bytes, [link.author.full_name for link in links])
+        if old_bytes and links
+        else [None] * len(links)
+    )
+
+    if article.doi is None:
+        found = extract_doi_from_pdf(pdf_bytes)
+        if found:
+            owner_id = session.scalar(select(Article.id).where(Article.doi == found))
+            if owner_id is not None:
+                result.conflicting_article_id = owner_id
+            else:
+                article.doi = found
+                article.status = "pending"  # the caller's fetch flips this to ready
+                result.doi_adopted = found
+
+    # Written after the DOI is settled: the filename is derived from it.
+    article.pdf_path = save_pdf(pdf_bytes, article.doi)
+    article.pdf_sha256 = pdf_sha256(pdf_bytes)
+    article.pdf_text = extract_pdf_text(pdf_bytes)
+
+    if not article.abstract or article.abstract == old_abstract:
+        abstract = extract_abstract_from_pdf(pdf_bytes)
+        if abstract and abstract != article.abstract:
+            article.abstract = abstract
+            result.abstract_updated = True
+
+    # Clear the affiliations the outgoing PDF supplied so the re-parse below fills
+    # them from the new one; anything Crossref set is left alone.
+    for link, previous in zip(links, old_affiliations, strict=False):
+        if previous and link.affiliation == previous:
+            link.affiliation = None
+    backfill_pdf_header(session, article, pdf_bytes)
+    session.commit()
+
+    if previous_path and previous_path != article.pdf_path:
+        Path(previous_path).unlink(missing_ok=True)  # superseded, nothing points at it
+
+    result.keywords = add_pdf_keywords(session, article, pdf_bytes)
+    result.affiliations_filled = apply_pdf_affiliations(session, article)
+    return result
 
 
 # --------------------------------------------------------------------------- duplicates

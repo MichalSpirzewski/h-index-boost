@@ -3,6 +3,7 @@ import mimetypes
 import secrets
 import zipfile
 from pathlib import Path
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import (
@@ -94,6 +95,9 @@ def _startup() -> None:
         # Crossref occasionally supplies HTML entities in container titles. Keep
         # journal links and page identifiers human-readable for old and new rows.
         ingest.backfill_journal_names(session)
+        # Fingerprint PDFs stored before the column existed, so the duplicate
+        # guard covers the library that already exists. One pass, then never again.
+        ingest.backfill_pdf_hashes(session)
 
 
 def _clean(value: str | None) -> str | None:
@@ -183,7 +187,21 @@ async def ingest_endpoint(
             "warnings": [],
         }
 
-    # No DOI anywhere: create a stub from PDF metadata / user input.
+    # No DOI anywhere, so there is nothing unique to key on — except the file
+    # itself. An identical PDF already in the library means this is the same paper
+    # being added a second time, which is how a library collects three copies of
+    # one DOI-less paper.
+    if pdf_bytes:
+        same_file = ingest.find_by_pdf_hash(session, pdf_bytes)
+        if same_file is not None:
+            result = _duplicate_response(
+                session, background_tasks, same_file, pdf_bytes
+            )
+            if _wants_html(request):
+                return RedirectResponse(f"{result['url']}?existing=1", status_code=303)
+            return result
+
+    # Create a stub from PDF metadata / user input.
     stub_title = title or (ingest.pdf_title(pdf_bytes) if pdf_bytes else None)
     warnings = []
     if stub_title:
@@ -247,6 +265,79 @@ def rescan_article(
             f"/articles/{article_id}?rescanned={len(keywords)}", status_code=303
         )
     return {"article_id": article_id, "keywords": keywords}
+
+
+_MAX_ARTICLE_PDF_SIZE = 50 * 1024 * 1024
+# Codes travel in the redirect query string; the page renders the message.
+_PDF_UPLOAD_ERRORS = {
+    "empty": "The selected file is empty — the stored PDF was left as it was.",
+    "too_large": "The selected file is larger than 50 MB.",
+    "not_pdf": "That file is not a PDF — the stored PDF was left as it was.",
+}
+
+
+def _pdf_upload_error(content: bytes) -> str | None:
+    """Reject a replacement before it overwrites a good file. Magic bytes, not the
+    extension: a mis-picked .docx renamed to .pdf would otherwise land on disk."""
+    if not content:
+        return "empty"
+    if len(content) > _MAX_ARTICLE_PDF_SIZE:
+        return "too_large"
+    if not content.startswith(b"%PDF"):
+        return "not_pdf"
+    return None
+
+
+@app.post("/articles/{article_id}/replace-pdf")
+async def replace_article_pdf(
+    request: Request,
+    article_id: int,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    session: Session = Depends(db.get_db),
+):
+    """Swap in a new PDF (or attach a first one) and re-parse the file's metadata."""
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    pdf_bytes = await file.read()
+    error = _pdf_upload_error(pdf_bytes)
+    if error:
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/articles/{article_id}?pdf_error={error}", status_code=303
+            )
+        raise HTTPException(status_code=422, detail=_PDF_UPLOAD_ERRORS[error])
+
+    result = ingest.replace_pdf(session, article, pdf_bytes)
+    if result.doi_adopted:
+        background_tasks.add_task(ingest.process_article, article_id)
+
+    if _wants_html(request):
+        params: dict[str, int] = {
+            "pdf_replaced": 1,
+            "pdf_keywords": len(result.keywords),
+        }
+        if result.abstract_updated:
+            params["pdf_abstract"] = 1
+        if result.affiliations_filled:
+            params["pdf_affiliations"] = result.affiliations_filled
+        if result.doi_adopted:
+            params["pdf_doi"] = 1
+        if result.conflicting_article_id:
+            params["pdf_doi_conflict"] = result.conflicting_article_id
+        return RedirectResponse(
+            f"/articles/{article_id}?{urlencode(params)}", status_code=303
+        )
+    return {
+        "article_id": article_id,
+        "keywords": result.keywords,
+        "abstract_updated": result.abstract_updated,
+        "affiliations_filled": result.affiliations_filled,
+        "doi_adopted": result.doi_adopted,
+        "doi_conflict_article_id": result.conflicting_article_id,
+    }
 
 
 @app.post("/api/rescan-pdfs")
@@ -643,6 +734,9 @@ _SORT_COLUMNS = {
 }
 _SORT_KEYS = set(_SORT_COLUMNS) | {"author"}
 
+# How many newest-first papers the dashboard's "Recent additions" panel lists.
+_RECENT_ADDITIONS = 5
+
 
 # --------------------------------------------------------------------------- keywords & topics
 
@@ -713,6 +807,7 @@ def index(
     order: str = "",
     keyword: int | None = None,
     topic: int | None = None,
+    hidden_article: int = 0,
 ):
     if sort not in _SORT_KEYS:
         sort = "year"
@@ -796,6 +891,21 @@ def index(
             meeting_links.append((author, meeting_link))
     meeting_links.sort(key=lambda pair: pair[0].full_name.casefold())
 
+    # Newest arrivals, deliberately unaffected by the table's filter and sort: the
+    # panel answers "what turned up lately", not "what is on screen".
+    recent_articles = list(
+        session.scalars(
+            select(Article)
+            .where(Article.hidden.is_(False))
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author)
+            )
+            # Bulk ingests share a timestamp, so break the tie on insertion order.
+            .order_by(Article.created_at.desc(), Article.id.desc())
+            .limit(_RECENT_ADDITIONS)
+        )
+    )
+
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -809,6 +919,11 @@ def index(
             "ncnr_authors": ncnr_authors,
             "other_authors": other_authors,
             "meeting_links": meeting_links,
+            "recent_articles": recent_articles,
+            "hidden_total": session.scalar(
+                select(func.count(Article.id)).where(Article.hidden.is_(True))
+            ),
+            "just_hidden": bool(hidden_article),
             "ncnr_label": NCNR_LABEL,
             # Keywords across the library + how many articles carry each, and the
             # curated topics they roll up into.
@@ -1334,6 +1449,14 @@ def article_detail(
     pdf_attached: int = 0,
     check_dup: int = 0,
     rescanned: int = -1,
+    pdf_replaced: int = 0,
+    pdf_keywords: int = 0,
+    pdf_abstract: int = 0,
+    pdf_affiliations: int = 0,
+    pdf_doi: int = 0,
+    pdf_doi_conflict: int = 0,
+    pdf_error: str | None = None,
+    restored: int = 0,
     citations_saved: int = 0,
     highlights_fetched: int = 0,
     highlights_failed: int = 0,
@@ -1359,6 +1482,14 @@ def article_detail(
             "pdf_attached": pdf_attached,
             "similar": similar,
             "rescanned": rescanned,
+            "pdf_replaced": bool(pdf_replaced),
+            "pdf_keywords": pdf_keywords,
+            "pdf_abstract": bool(pdf_abstract),
+            "pdf_affiliations": pdf_affiliations,
+            "pdf_doi": bool(pdf_doi),
+            "pdf_doi_conflict": pdf_doi_conflict,
+            "pdf_error": _PDF_UPLOAD_ERRORS.get(pdf_error or ""),
+            "restored": bool(restored),
             "citations_saved": bool(citations_saved),
             "highlights_fetched": bool(highlights_fetched),
             "highlights_failed": bool(highlights_failed),
@@ -1423,6 +1554,57 @@ def save_article_highlights(
     session.commit()
     return RedirectResponse(
         f"/articles/{article_id}?highlights_saved=1", status_code=303
+    )
+
+
+@app.post("/articles/{article_id}/hide")
+def hide_article(
+    request: Request, article_id: int, session: Session = Depends(db.get_db)
+):
+    """Soft delete: the record drops out of every listing but is never destroyed.
+
+    The way to clear an accidental duplicate. `/hidden` lists what has been put
+    away and offers it back.
+    """
+    article = session.get(Article, article_id)
+    if article is None or article.hidden:
+        raise HTTPException(status_code=404, detail="Article not found")
+    article.hidden = True
+    session.commit()
+    if _wants_html(request):
+        return RedirectResponse("/?hidden_article=1", status_code=303)
+    return {"article_id": article_id, "hidden": True}
+
+
+@app.post("/articles/{article_id}/unhide")
+def unhide_article(
+    request: Request, article_id: int, session: Session = Depends(db.get_db)
+):
+    article = session.get(Article, article_id)
+    if article is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    article.hidden = False
+    session.commit()
+    if _wants_html(request):
+        return RedirectResponse(f"/articles/{article_id}?restored=1", status_code=303)
+    return {"article_id": article_id, "hidden": False}
+
+
+@app.get("/hidden")
+def hidden_articles(request: Request, session: Session = Depends(db.get_db)):
+    """The soft-deleted records, newest first, each restorable in one click."""
+    articles = list(
+        session.scalars(
+            select(Article)
+            .where(Article.hidden.is_(True))
+            .options(
+                selectinload(Article.author_links).selectinload(ArticleAuthor.author)
+            )
+            .order_by(Article.created_at.desc(), Article.id.desc())
+        )
+    )
+    return templates.TemplateResponse(
+        request, "hidden.html", {"articles": articles}
     )
 
 

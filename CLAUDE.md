@@ -80,7 +80,8 @@ Endpoint accepts any combination of: PDF file, URL, raw DOI.
 
 1. Resolve DOI: from the raw input → from the URL (regex `10.\d{4,9}/[^\s"<>]+`) → from the PDF text (first 2 pages, then metadata dict).
 2. Normalize DOI; check UNIQUE constraint. If duplicate → HTTP 200 with "already in library" + link to existing article. Never a hard error. If a PDF was uploaded and the existing record lacks one, attach it.
-3. No DOI found → create a stub Article from PDF metadata/user input; run `rapidfuzz` title similarity (threshold ~92) against existing titles and surface a soft warning in the response.
+2b. No DOI resolved anywhere but a PDF was uploaded → look the file up by `pdf_sha256` (SHA-256 of the bytes, stored on every PDF, indexed but *not* UNIQUE) and take the same "already in library" path. Without this a paper carrying no DOI has nothing to be unique on, and the same upload creates a new record every time. Hidden records are excluded from the lookup: their links 404, and re-adding something soft-deleted is legitimate. DOI resolution runs first, so supplying a DOI for a file already stored still enriches rather than short-circuits.
+3. No DOI found → create a stub Article from PDF metadata/user input; run `rapidfuzz` title similarity (threshold ~92) against existing titles and surface a soft warning in the response. Title, journal and authors also come from the front page's *typography* (PyMuPDF's layout dict, not the flat text): the title is the largest-face run of lines on page 1, the running head above it gives the journal (cut at the volume/year/page apparatus), and the byline below it yields authors once the superscript affiliation markers are dropped — flat extraction fuses those onto surnames ("Maciej Skrzypek" + `a` → "Maciej Skrzypeka"). The PDF only ever fills fields that are still empty. Authors are additionally only created for a record with no DOI and no stored Crossref message; where Crossref has one it owns the byline and its order.
 4. Return immediately; continue in a `BackgroundTasks` job:
    - Crossref: `GET https://api.crossref.org/works/{doi}` with a `mailto=` param (polite pool). Store full JSON. Extract title, year, journal, abstract, authors (+ ORCID, order), subjects.
    - Semantic Scholar: fieldsOfStudy, abstract fallback. Unpaywall: OA PDF link if no PDF uploaded. Both optional — failures must not fail ingestion.
@@ -91,7 +92,7 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 
 ## Pages / routes
 
-- `GET /` — dashboard: recent additions, top authors (article count), topic and keyword chips, search box (FTS5). `?keyword={id}` filters to one keyword, `?topic={id}` to every keyword in a topic.
+- `GET /` — dashboard: top authors (article count), topic and keyword chips, meeting links, a "Recent additions" panel below them listing the five newest-added papers (library-wide, so filters never narrow it), search box (FTS5). `?keyword={id}` filters to one keyword, `?topic={id}` to every keyword in a topic.
 - `GET /articles` — paginated table (50/page), filters: topic, keyword, author, year, full-text query. Row actions: view, download PDF, download BibTeX, select-checkbox.
 - `POST /export/bibtex` — selected article ids → single merged `.bib` download. Also `GET /articles/{id}/bibtex` for one.
 - `POST /export/word-xml` — same selection → single `.xml` for Microsoft Word's Source Manager. Also `GET /articles/{id}/word-xml` for one.
@@ -103,7 +104,8 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 - `GET /topics` + `POST /topics` — the topic overview (each topic's paper/keyword counts, plus the keywords in no topic yet) and topic creation. Names are UNIQUE; a clash is a 409 re-render, not a crash.
 - `GET /topics/{id}` — one topic: its papers, and a picker holding *every* keyword in the library. `POST /topics/{id}/keywords` with `keyword_id` toggles one keyword in or out — that single click is the whole classification UI. `POST /topics/{id}` renames/describes it, `POST /topics/{id}/delete` drops the grouping (keywords and papers survive).
 - `GET /upload` + `POST /api/ingest` — the hybrid upload form (file and/or link/DOI, optional "your name" remembered in localStorage and sent as `added_by`).
-- `POST /articles/{id}/hide` — soft delete. No hard deletes anywhere.
+- `POST /articles/{id}/replace-pdf` — upload a new PDF for an existing record (or a first one) and re-parse it: full text, keywords, abstract, affiliations, and — for a record without one — a DOI printed in the file, which then triggers the Crossref fetch. Only values the *replaced* PDF supplied are rewritten; Crossref-sourced metadata survives and keywords are never dropped.
+- `POST /articles/{id}/hide` / `POST /articles/{id}/unhide` / `GET /hidden` — soft delete, restore, and the list of what has been put away. No hard deletes anywhere, so hiding keeps the PDF, metadata and keyword links intact. The dashboard links to `/hidden` only while something is in it.
 
 BibTeX generation: cite key = `firstauthorlastnameYEARfirstword` (deduplicate with `a`,`b` suffixes within an export). Escape special characters; keep Unicode (biblatex-friendly) but escape `{`, `}`, `%`, `&`, `#`.
 

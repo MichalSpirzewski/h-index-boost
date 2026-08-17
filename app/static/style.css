@@ -406,6 +406,25 @@ button.chip {
 .meeting-list .meeting-author { color: #234; }
 .meeting-list .btn { flex: 0 0 auto; margin-right: 0; }
 .empty-panel { color: #6b7785; margin: 0.75rem 0 0; }
+/* Newest arrivals, listed under Meetings in the right-hand column. */
+.dashboard-panels-right > .authors-panel:last-child { margin-bottom: 0; }
+.recent-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+.recent-list li {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+.recent-list li:last-child { border-bottom: 0; }
+.recent-title { display: block; color: #234; line-height: 1.35; }
+.recent-meta {
+  display: block;
+  margin-top: 0.15rem;
+  color: #6b7785;
+  font-size: 0.8rem;
+}
 @media (max-width: 75rem) {
   .dashboard-panels {
     width: 100%;
@@ -479,6 +498,23 @@ button.chip {
 @media (max-width: 48rem) {
   .article-notes-grid { grid-template-columns: 1fr; }
 }
+
+/* Replace / attach the stored PDF on the article detail page. */
+.pdf-manage {
+  margin-top: 1.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #dde3ea;
+  border-radius: 4px;
+  background: #fafbfc;
+}
+.pdf-manage h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.pdf-manage label { display: block; font-size: 0.9rem; }
+.pdf-manage input[type="file"] { display: block; margin-top: 0.3rem; }
+.pdf-manage .subtle { margin: 0.5rem 0; font-size: 0.85rem; }
+.pdf-manage form + form { margin-top: 0.75rem; }
+.remove-record { margin-top: 1.5rem; }
+.remove-record h2 { margin: 0 0 0.35rem; font-size: 1.1rem; }
+.remove-record .subtle { margin: 0 0 0.6rem; font-size: 0.85rem; max-width: 44rem; }
 
 /* Author affiliations */
 .affiliations {
