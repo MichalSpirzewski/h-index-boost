@@ -22,6 +22,19 @@
   {% endif %}
 </div>
 {% endif %}
+{% if restored %}<div class="banner ok">Restored to the library.</div>{% endif %}
+{% if pdf_error %}<div class="banner error">{{ pdf_error }}</div>{% endif %}
+{% if pdf_replaced %}
+<div class="banner ok">
+  PDF stored and re-parsed — {{ pdf_keywords }} keyword{{ "s" if pdf_keywords != 1 }} found{% if pdf_abstract %}, abstract taken from the file{% endif %}{% if pdf_affiliations %}, {{ pdf_affiliations }} author affiliation{{ "s" if pdf_affiliations != 1 }} filled{% endif %}{% if pdf_doi %}, DOI read from the file — fetching metadata{% endif %}.
+</div>
+{% endif %}
+{% if pdf_doi_conflict %}
+<div class="banner warn">
+  The new PDF carries a DOI that <a href="/articles/{{ pdf_doi_conflict }}">another record</a>
+  already holds, so this one was left without one.
+</div>
+{% endif %}
 {% if highlights_fetched %}<div class="banner ok">Publisher Highlights saved.</div>{% endif %}
 {% if highlights_failed %}
 <div class="banner warn">No Highlights could be retrieved. The publisher may block automated access or may not expose them in the page HTML.</div>
@@ -151,10 +164,40 @@
     });
   })();
 </script>
-{% if article.pdf_path %}
-<form action="/articles/{{ article.id }}/rescan" method="post">
-  <button type="submit">Rescan PDF for keywords</button>
-</form>
-{% endif %}
+<section class="pdf-manage">
+  <h2>PDF file</h2>
+  <form action="/articles/{{ article.id }}/replace-pdf" method="post" enctype="multipart/form-data">
+    <label>
+      {% if article.pdf_path %}Replace the stored PDF{% else %}Attach a PDF{% endif %}
+      <input type="file" name="file" accept="application/pdf" required>
+    </label>
+    <p class="subtle">
+      The uploaded file is re-parsed: full text for search, keywords, and — where they
+      came from the PDF rather than Crossref — the abstract and author affiliations{% if not article.doi %}. A DOI
+      printed in the file is picked up too{% endif %}.
+    </p>
+    <div class="editor-actions">
+      <button type="submit">Upload &amp; re-parse</button>
+    </div>
+  </form>
+  {% if article.pdf_path %}
+  <form action="/articles/{{ article.id }}/rescan" method="post">
+    <button type="submit">Rescan stored PDF for keywords</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="remove-record">
+  <h2>Remove from the library</h2>
+  <p class="subtle">
+    For a paper added twice by mistake. The record is hidden rather than deleted —
+    it keeps its PDF and metadata and can be restored from the
+    <a href="/hidden">hidden list</a> at any time.
+  </p>
+  <form action="/articles/{{ article.id }}/hide" method="post"
+        onsubmit="return confirm('Hide this publication? It leaves the library but is not deleted, and you can restore it from /hidden.');">
+    <button type="submit" class="btn danger">Hide this publication</button>
+  </form>
+</section>
 </div>
 {% endblock %}

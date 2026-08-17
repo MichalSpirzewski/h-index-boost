@@ -12,10 +12,17 @@
   </th>
 {% endmacro %}
 {% block content %}
+{% if just_hidden %}
+<div class="banner ok">
+  Publication hidden. It is out of the library but not deleted —
+  <a href="/hidden">restore it from the hidden list</a> whenever you like.
+</div>
+{% endif %}
 <div class="page-actions">
   <a class="btn" href="/projects/new">Create a project</a>
   <a class="btn" href="/projects">Browse projects</a>
   <a class="btn" href="/topics">Manage topics</a>
+  {% if hidden_total %}<a class="btn" href="/hidden">Hidden ({{ hidden_total }})</a>{% endif %}
 </div>
 {% macro author_group(pairs) %}
 <ul class="author-list">
@@ -80,23 +87,47 @@
     </section>
     {% endif %}
   </div>
-  <section class="authors-panel meetings-panel">
-    <details>
-      <summary><span class="panel-title">Meetings</span> <span class="count-badge">{{ meeting_links | length }}</span></summary>
-      {% if meeting_links %}
-      <ul class="meeting-list">
-        {% for author, meeting_link in meeting_links %}
-        <li>
-          <a class="meeting-author" href="/authors/{{ author.id }}">{{ author.full_name }}</a>
-          <a class="btn" href="{{ meeting_link }}" target="_blank" rel="noopener">Join meeting</a>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="empty-panel">No meeting links saved.</p>
-      {% endif %}
-    </details>
-  </section>
+  <div class="dashboard-panels-right">
+    <section class="authors-panel meetings-panel">
+      <details>
+        <summary><span class="panel-title">Meetings</span> <span class="count-badge">{{ meeting_links | length }}</span></summary>
+        {% if meeting_links %}
+        <ul class="meeting-list">
+          {% for author, meeting_link in meeting_links %}
+          <li>
+            <a class="meeting-author" href="/authors/{{ author.id }}">{{ author.full_name }}</a>
+            <a class="btn" href="{{ meeting_link }}" target="_blank" rel="noopener">Join meeting</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty-panel">No meeting links saved.</p>
+        {% endif %}
+      </details>
+    </section>
+    <section class="authors-panel recent-panel">
+      <details>
+        <summary><span class="panel-title">Recent additions</span> <span class="count-badge">{{ recent_articles | length }}</span></summary>
+        {% if recent_articles %}
+        <ol class="recent-list">
+          {% for paper in recent_articles %}
+          <li>
+            <a class="recent-title" href="/articles/{{ paper.id }}">{{ paper.title or paper.doi or "(untitled)" }}</a>
+            <span class="recent-meta">
+              {%- if paper.authors %}{{ paper.authors[0].full_name | short_name }}{% if paper.authors | length > 1 %} et al.{% endif %} · {% endif -%}
+              {%- if paper.created_at %}added {{ paper.created_at.strftime("%Y-%m-%d") }}{% else %}added{% endif -%}
+              {%- if paper.added_by %} by {{ paper.added_by }}{% endif -%}
+            </span>
+          </li>
+          {% endfor %}
+        </ol>
+        <p class="panel-hint"><a href="/?sort=recent">Browse everything by date added</a></p>
+        {% else %}
+        <p class="empty-panel">Nothing in the library yet. <a href="/upload">Add the first paper</a>.</p>
+        {% endif %}
+      </details>
+    </section>
+  </div>
 </div>
 {#- Counts live on the section headers below, so the page title carries none. -#}
 {% if active_topic or active_keyword %}

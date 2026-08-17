@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Hidden publications <span class="count-badge">{{ articles | length }}</span></h1>
+<p class="sort">
+  Records removed from the library. Nothing here is deleted — the file, the metadata
+  and the keywords are all still stored, so restoring one puts it back exactly as it was.
+  <a href="/">Return to library</a>.
+</p>
+{% if articles %}
+<table class="wide-table">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Authors</th>
+      <th>Added</th>
+      <th>Restore</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for article in articles %}
+    <tr>
+      <td class="article-title-cell">{{ article.title or article.doi or "(untitled)" }}</td>
+      <td>
+        {%- for author in article.authors %}{{ author.full_name | short_name }}{% if not loop.last %}, {% endif %}{% endfor -%}
+      </td>
+      <td>{% if article.created_at %}{{ article.created_at.strftime("%Y-%m-%d") }}{% endif %}{% if article.added_by %} <span class="subtle">by {{ article.added_by }}</span>{% endif %}</td>
+      <td class="row-actions">
+        <form action="/articles/{{ article.id }}/unhide" method="post">
+          <button type="submit" class="btn">Restore</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-panel">Nothing is hidden.</p>
+{% endif %}
+{% endblock %}
