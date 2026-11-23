@@ -26,7 +26,7 @@ Think: minimal self-hosted Zotero for a group, without accounts.
 | Frontend | Server-rendered Jinja2 templates + HTMX | no JS build step; small vanilla JS where unavoidable |
 | Fuzzy matching | `rapidfuzz` | soft duplicate warning for DOI-less papers |
 | File storage | local disk `data/pdfs/` | filename = normalized DOI (slashes → `_`) or UUID if no DOI |
-| Login | `ldap3` + Starlette `SessionMiddleware` (`itsdangerous`) | via the `institute-auth` package from the separate [ncbj-login](https://code.cis.gov.pl/ncbj_apps/ncbj-login) repo (`git@code.cis.gov.pl:ncbj_apps/ncbj-login.git`); see "Login" below |
+| Login | `ldap3` + Starlette `SessionMiddleware` (`itsdangerous`) | via the `institute-auth` package from the separate [ncbj-login](https://github.com/MichalSpirzewski/ncbj_login) repo (`git@github.com:MichalSpirzewski/ncbj_login.git`); see "Login" below |
 
 Rationale for HTMX over React: stateless server, ~40 users, read-heavy dashboard, and the maintainers are researchers, not frontend devs. Keep it boring.
 

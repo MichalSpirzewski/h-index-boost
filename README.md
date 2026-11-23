@@ -186,7 +186,7 @@ are really you (a match can be a namesake); your papers are then listed there an
 marked "you" on author and paper pages.
 
 The login mechanics are a separate, reusable package in the
-ncbj-login repository (`git@code.cis.gov.pl:ncbj_apps/ncbj-login.git`,
+ncbj-login repository (`git@github.com:MichalSpirzewski/ncbj_login.git`,
 installed from `requirements.txt`); RefBase's rules (what
 needs a login, project visibility) are in `app/auth.py`.
 

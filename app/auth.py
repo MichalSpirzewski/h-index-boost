@@ -1,7 +1,7 @@
 """RefBase's use of the institute (Active Directory) login.
 
 The mechanics live in the reusable `institute_auth` package from the separate
-ncbj-login repository (git@code.cis.gov.pl:ncbj_apps/ncbj-login.git).
+ncbj-login repository (git@github.com:MichalSpirzewski/ncbj_login.git).
 This file holds only what is RefBase policy:
 
 - reading is open to everyone; changing anything needs a login (`needs_login`);
