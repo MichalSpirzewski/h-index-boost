@@ -69,6 +69,14 @@ fi
 
 source "$CONDA_BASE/bin/activate" "$CONDA_ENV"
 
+# Institute login (Active Directory). Not secrets — the address of the NCBJ
+# domain controller — so defaulted here; override any of them from the shell.
+# The DC offers no TLS (no LDAPS, StartTLS refused), so passwords travel to it
+# unencrypted; set REFBASE_LDAP_STARTTLS=true once IT installs a certificate.
+export REFBASE_LDAP_URL="${REFBASE_LDAP_URL:-ldap://10.170.10.2}"
+export REFBASE_LDAP_DOMAIN="${REFBASE_LDAP_DOMAIN:-CENTRUM}"
+export REFBASE_LDAP_BASE_DN="${REFBASE_LDAP_BASE_DN:-DC=ncbj,DC=gov,DC=pl}"
+
 if command -v hostname >/dev/null 2>&1; then
   LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   if [[ -n "${LAN_IP:-}" ]]; then

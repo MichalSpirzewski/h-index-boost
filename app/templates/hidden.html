@@ -25,9 +25,11 @@
       </td>
       <td>{% if article.created_at %}{{ article.created_at.strftime("%Y-%m-%d") }}{% endif %}{% if article.added_by %} <span class="subtle">by {{ article.added_by }}</span>{% endif %}</td>
       <td class="row-actions">
+        {% if current_user %}
         <form action="/articles/{{ article.id }}/unhide" method="post">
           <button type="submit" class="btn">Restore</button>
         </form>
+        {% endif %}
       </td>
     </tr>
     {% endfor %}

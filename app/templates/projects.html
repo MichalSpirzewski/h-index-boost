@@ -15,6 +15,7 @@
     <span class="project-card-title">{{ project.acronym or project.name }}</span>
     {% if project.acronym %}<span class="project-card-name">{{ project.name }}</span>{% endif %}
     {% if project.project_number %}<span class="project-card-number">Project {{ project.project_number }}</span>{% endif %}
+    {% if project.ad_group_name %}<span class="project-card-number">Group: {{ project.ad_group_name }}</span>{% endif %}
     {% if project.description %}<span class="project-card-description">{{ project.description }}</span>{% endif %}
     <span class="project-card-count">
       {{ project.documents | rejectattr("status", "equalto", "archived") | list | length }}

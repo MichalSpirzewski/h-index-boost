@@ -13,18 +13,13 @@
   <label>URL or DOI link <input type="text" name="url" placeholder="https://doi.org/10.1038/..."></label>
   <label>Raw DOI <input type="text" name="doi" placeholder="10.1038/nphys1170"></label>
   <label>Title (only needed if no DOI) <input type="text" name="title"></label>
-  <label>Your name <input type="text" name="added_by" id="added_by"></label>
+  <p class="subtle">Added by {{ current_user.display_name }}.</p>
   <p class="form-actions">
     <button type="submit">Add to library</button>
     <a class="btn" href="/">Return to library</a>
   </p>
 </form>
 <script>
-  /* remember "your name" locally; sent as added_by */
-  const field = document.getElementById("added_by");
-  field.value = localStorage.getItem("refbase_added_by") || "";
-  field.form.addEventListener("submit", () => localStorage.setItem("refbase_added_by", field.value));
-
   /* drag-and-drop PDF picker: feeds the hidden file input so the form submits as usual */
   const dropzone = document.getElementById("dropzone");
   const fileInput = document.getElementById("file-input");

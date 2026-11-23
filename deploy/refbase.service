@@ -15,6 +15,18 @@ Group=refbase
 WorkingDirectory=/srv/refbase
 Environment=REFBASE_DATA_DIR=/srv/refbase/data
 
+# Institute login against NCBJ Active Directory (see README "Login").
+Environment=REFBASE_LDAP_URL=ldap://10.170.10.2
+Environment=REFBASE_LDAP_DOMAIN=CENTRUM
+Environment=REFBASE_LDAP_BASE_DN=DC=ncbj,DC=gov,DC=pl
+# Caddy serves HTTPS, so the login cookie must never be sent over plain HTTP.
+Environment=REFBASE_COOKIE_SECURE=true
+# Secrets (REFBASE_SESSION_SECRET, REFBASE_API_KEY) live outside the repo:
+#   sudo install -m 600 -o refbase /dev/null /srv/refbase/refbase.env
+#   echo "REFBASE_SESSION_SECRET=$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')" \
+#     | sudo tee -a /srv/refbase/refbase.env
+EnvironmentFile=-/srv/refbase/refbase.env
+
 # --host 127.0.0.1: the plain-HTTP port must not be reachable from the LAN, or
 #   users could bypass TLS by hitting :8000 directly.
 # --proxy-headers: trust X-Forwarded-* so logs show the real client address

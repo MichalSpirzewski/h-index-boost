@@ -18,16 +18,19 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from institute_auth import current_user
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app import (
     api_v1,
+    auth,
     bibtex,
     contacts,
     db,
     ingest,
+    people,
     project_document_parser,
     site_export,
     word_xml,
@@ -53,6 +56,7 @@ from app.templating import templates
 
 app = FastAPI(title="RefBase")
 app.include_router(api_v1.router)
+auth.auth.install(app)
 
 _BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
@@ -124,9 +128,11 @@ async def ingest_endpoint(
     url: str | None = Form(None),
     doi: str | None = Form(None),
     title: str | None = Form(None),
-    added_by: str | None = Form(None),
 ):
-    url, doi, title, added_by = _clean(url), _clean(doi), _clean(title), _clean(added_by)
+    url, doi, title = _clean(url), _clean(doi), _clean(title)
+    # Only reachable logged in (see app/auth.py), so the directory says who added it.
+    user = current_user(request)
+    added_by = user.display_name if user else None
 
     pdf_bytes: bytes | None = None
     if file is not None and file.filename:
@@ -380,13 +386,15 @@ def article_status(article_id: int, session: Session = Depends(db.get_db)):
     }
 
 
-def _project_or_404(session: Session, project_id: str) -> Project:
+def _project_or_404(session: Session, project_id: str, request: Request) -> Project:
+    """The project, or 404 — also when the user is not in its AD group, so a
+    project's existence is not revealed to people who cannot open it."""
     project = session.scalar(
         select(Project)
         .where(Project.id == project_id)
         .options(selectinload(Project.documents))
     )
-    if project is None:
+    if project is None or not auth.can_see_project(current_user(request), project):
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
@@ -421,7 +429,15 @@ def _project_page_context(
             "project_number_updated"
         )
         == "1",
+        "group_updated": request.query_params.get("group_updated") == "1",
+        "group_options": _group_options(request),
     }
+
+
+def _group_options(request: Request) -> list:
+    """The logged-in user's own AD groups: the only ones they may give a project."""
+    user = current_user(request)
+    return list(user.groups) if user else []
 
 
 @app.get("/projects")
@@ -434,13 +450,15 @@ def project_list(request: Request, session: Session = Depends(db.get_db)):
     return templates.TemplateResponse(
         request,
         "projects.html",
-        {"projects": projects},
+        {"projects": auth.visible_projects(current_user(request), projects)},
     )
 
 
 @app.get("/projects/new")
 def new_project_page(request: Request):
-    return templates.TemplateResponse(request, "project_new.html", {})
+    return templates.TemplateResponse(
+        request, "project_new.html", {"group_options": _group_options(request)}
+    )
 
 
 @app.post("/projects")
@@ -451,22 +469,33 @@ def create_project(
     project_number: str = Form(...),
     description: str | None = Form(None),
     session: Session = Depends(db.get_db),
+    ad_group_dn: str | None = Form(None),
 ):
     name = name.strip()
     acronym = _clean(acronym)
     project_number = project_number.strip()
     description = _clean(description)
+    group = auth.user_group(current_user(request), _clean(ad_group_dn))
+    form_values = {
+        "name": name,
+        "acronym": acronym or "",
+        "project_number": project_number,
+        "description": description or "",
+        "ad_group_dn": ad_group_dn or "",
+        "group_options": _group_options(request),
+    }
+    error = None
     if not name or not project_number:
+        error = "Project name and project number are required."
+    elif group is None:
+        # Every project is tied to an AD group, and only to one the creator is in,
+        # so nobody can open a project up to (or for) a group they are not part of.
+        error = "Choose the AD group whose members may see this project."
+    if error:
         return templates.TemplateResponse(
             request,
             "project_new.html",
-            {
-                "error": "Project name and project number are required.",
-                "name": name,
-                "acronym": acronym or "",
-                "project_number": project_number,
-                "description": description or "",
-            },
+            {"error": error, **form_values},
             status_code=422,
         )
 
@@ -475,6 +504,8 @@ def create_project(
         acronym=acronym,
         project_number=project_number,
         description=description,
+        ad_group_dn=group.dn,
+        ad_group_name=group.name,
     )
     session.add(project)
     try:
@@ -486,10 +517,7 @@ def create_project(
             "project_new.html",
             {
                 "error": "A project with this acronym or project number already exists.",
-                "name": name,
-                "acronym": acronym or "",
-                "project_number": project_number,
-                "description": description or "",
+                **form_values,
             },
             status_code=409,
         )
@@ -502,7 +530,7 @@ def project_detail(
     project_id: str,
     session: Session = Depends(db.get_db),
 ):
-    project = _project_or_404(session, project_id)
+    project = _project_or_404(session, project_id, request)
     return templates.TemplateResponse(
         request,
         "project_detail.html",
@@ -517,7 +545,7 @@ def update_project_number(
     project_number: str = Form(...),
     session: Session = Depends(db.get_db),
 ):
-    project = _project_or_404(session, project_id)
+    project = _project_or_404(session, project_id, request)
     project_number = project_number.strip()
     if not project_number:
         return templates.TemplateResponse(
@@ -537,7 +565,7 @@ def update_project_number(
         session.commit()
     except IntegrityError:
         session.rollback()
-        project = _project_or_404(session, project_id)
+        project = _project_or_404(session, project_id, request)
         return templates.TemplateResponse(
             request,
             "project_detail.html",
@@ -553,6 +581,32 @@ def update_project_number(
         f"/projects/{project.id}?project_number_updated=1",
         status_code=303,
     )
+
+
+@app.post("/projects/{project_id}/group")
+def update_project_group(
+    request: Request,
+    project_id: str,
+    ad_group_dn: str = Form(""),
+    session: Session = Depends(db.get_db),
+):
+    """Re-assign the project's AD group. Only someone who can see the project may
+    do it (`_project_or_404`), and only to one of their own groups."""
+    project = _project_or_404(session, project_id, request)
+    group = auth.user_group(current_user(request), _clean(ad_group_dn))
+    if group is None:
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _project_page_context(
+                request, project, error="Choose one of your AD groups."
+            ),
+            status_code=422,
+        )
+    project.ad_group_dn = group.dn
+    project.ad_group_name = group.name
+    session.commit()
+    return RedirectResponse(f"/projects/{project.id}?group_updated=1", status_code=303)
 
 
 def _next_project_entity_key(
@@ -586,7 +640,7 @@ async def upload_project_document(
     description: str | None = Form(None),
     session: Session = Depends(db.get_db),
 ):
-    project = _project_or_404(session, project_id)
+    project = _project_or_404(session, project_id, request)
     if document_type not in {"deliverable", "milestone"}:
         return templates.TemplateResponse(
             request,
@@ -626,6 +680,12 @@ async def upload_project_document(
         matched_project = session.scalar(
             select(Project).where(Project.project_number == parsed.project_number)
         )
+        if matched_project is not None and not auth.can_see_project(
+            current_user(request), matched_project
+        ):
+            # Filing into a project the uploader cannot see would leak the
+            # document to its members and confirm the project exists.
+            matched_project = None
         if matched_project is None:
             return templates.TemplateResponse(
                 request,
@@ -635,7 +695,7 @@ async def upload_project_document(
                     project,
                     error=(
                         f"The PDF belongs to project {parsed.project_number}, "
-                        "but no project with that number exists."
+                        "but you have no project with that number."
                     ),
                 ),
                 status_code=422,
@@ -683,7 +743,7 @@ async def upload_project_document(
     except IntegrityError:
         session.rollback()
         stored_path.unlink(missing_ok=True)
-        project = _project_or_404(session, project_id)
+        project = _project_or_404(session, project_id, request)
         return templates.TemplateResponse(
             request,
             "project_detail.html",
@@ -699,12 +759,17 @@ async def upload_project_document(
 
 @app.get("/project-documents/{document_id}/file")
 def project_document_file(
+    request: Request,
     document_id: str,
     session: Session = Depends(db.get_db),
     download: int = 0,
 ):
     document = session.get(ProjectDocument, document_id)
     if document is None or document.status == "archived" or not document.file_path:
+        raise HTTPException(status_code=404, detail="Project document file not found")
+    if document.local_project is not None and not auth.can_see_project(
+        current_user(request), document.local_project
+    ):
         raise HTTPException(status_code=404, detail="Project document file not found")
     path = Path(document.file_path)
     if not path.is_file():
@@ -1122,6 +1187,7 @@ def author_detail(
         "author.html",
         {
             "author": author,
+            "is_me": author.id in people.confirmed_author_ids(session, current_user(request)),
             "articles": articles,
             "sort": sort,
             "order": order,
@@ -1477,6 +1543,8 @@ def article_detail(
         "article.html",
         {
             "article": article,
+            "my_author_ids": people.confirmed_author_ids(session, current_user(request)),
+            "can_edit_notes": people.is_author_of(session, current_user(request), article),
             "added": added,
             "existing": existing,
             "pdf_attached": pdf_attached,
@@ -1498,14 +1566,26 @@ def article_detail(
     )
 
 
+def _require_paper_author(request: Request, session: Session, article: Article) -> None:
+    """Citation examples and highlights speak for the paper, so only its own
+    authors — users who confirmed one of its author records on /me — edit them."""
+    if not people.is_author_of(session, current_user(request), article):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the paper's authors can change its citation examples and highlights.",
+        )
+
+
 @app.post("/articles/{article_id}/fetch-highlights")
 def fetch_article_highlights(
+    request: Request,
     article_id: int,
     session: Session = Depends(db.get_db),
 ):
     article = session.get(Article, article_id)
     if article is None or article.hidden:
         raise HTTPException(status_code=404, detail="Article not found")
+    _require_paper_author(request, session, article)
     if not article.doi:
         raise HTTPException(status_code=400, detail="Article has no DOI")
     if article.highlights:
@@ -1527,6 +1607,7 @@ def fetch_article_highlights(
 
 @app.post("/articles/{article_id}/citation-examples")
 def save_article_citation_examples(
+    request: Request,
     article_id: int,
     session: Session = Depends(db.get_db),
     citation_examples: str | None = Form(None),
@@ -1534,6 +1615,7 @@ def save_article_citation_examples(
     article = session.get(Article, article_id)
     if article is None or article.hidden:
         raise HTTPException(status_code=404, detail="Article not found")
+    _require_paper_author(request, session, article)
     article.citation_examples = _clean(citation_examples)
     session.commit()
     return RedirectResponse(
@@ -1543,6 +1625,7 @@ def save_article_citation_examples(
 
 @app.post("/articles/{article_id}/highlights")
 def save_article_highlights(
+    request: Request,
     article_id: int,
     session: Session = Depends(db.get_db),
     highlights: str | None = Form(None),
@@ -1550,6 +1633,7 @@ def save_article_highlights(
     article = session.get(Article, article_id)
     if article is None or article.hidden:
         raise HTTPException(status_code=404, detail="Article not found")
+    _require_paper_author(request, session, article)
     article.highlights = _clean(highlights)
     session.commit()
     return RedirectResponse(
@@ -1588,6 +1672,74 @@ def unhide_article(
     if _wants_html(request):
         return RedirectResponse(f"/articles/{article_id}?restored=1", status_code=303)
     return {"article_id": article_id, "hidden": False}
+
+
+# --------------------------------------------------------------------------- me
+@app.get("/me")
+def my_page(request: Request, session: Session = Depends(db.get_db), saved: int = 0):
+    """The logged-in user's author records (confirmed + name-matched suggestions)
+    and the publications of the confirmed ones."""
+    user = current_user(request)
+    confirmed = people.confirmed_author_ids(session, user)
+    candidates = {author.id: author for author in people.suggested_authors(session, user)}
+    for author_id in confirmed:
+        if author_id not in candidates:
+            candidates[author_id] = session.get(Author, author_id)
+
+    # Per candidate: paper count and a few titles, so namesakes can be told apart.
+    papers_by_author: dict[int, list[Article]] = {author_id: [] for author_id in candidates}
+    if candidates:
+        rows = session.execute(
+            select(ArticleAuthor.author_id, Article)
+            .join(Article, Article.id == ArticleAuthor.article_id)
+            .where(ArticleAuthor.author_id.in_(candidates), Article.hidden.is_(False))
+            .order_by(Article.year.desc().nulls_last(), Article.created_at.desc())
+        ).all()
+        for author_id, article in rows:
+            papers_by_author[author_id].append(article)
+
+    articles: list[Article] = []
+    if confirmed:
+        articles = list(
+            session.scalars(
+                select(Article)
+                .join(ArticleAuthor, ArticleAuthor.article_id == Article.id)
+                .where(ArticleAuthor.author_id.in_(confirmed), Article.hidden.is_(False))
+                .distinct()
+                .options(selectinload(Article.author_links).selectinload(ArticleAuthor.author))
+                .order_by(Article.year.desc().nulls_last(), Article.created_at.desc())
+            )
+        )
+    ordered = sorted(
+        candidates.values(),
+        key=lambda a: (a.id not in confirmed, a.full_name.casefold(), a.id),
+    )
+    return templates.TemplateResponse(
+        request,
+        "me.html",
+        {
+            "candidates": ordered,
+            "confirmed": confirmed,
+            "papers_by_author": papers_by_author,
+            "articles": articles,
+            "my_author_ids": confirmed,
+            "name_used": people.name_candidates(user),
+            "saved": bool(saved),
+        },
+    )
+
+
+@app.post("/me/authors")
+def save_my_authors(
+    request: Request,
+    session: Session = Depends(db.get_db),
+    author_id: list[int] = Form(default=[]),
+):
+    user = current_user(request)
+    allowed = {a.id for a in people.suggested_authors(session, user)}
+    allowed |= people.confirmed_author_ids(session, user)
+    people.set_confirmed_authors(session, user, author_id, allowed)
+    return RedirectResponse("/me?saved=1", status_code=303)
 
 
 @app.get("/hidden")

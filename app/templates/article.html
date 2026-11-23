@@ -68,7 +68,7 @@
 {% endif %}
 
 <p>
-  {% for author in article.authors %}<a href="/authors/{{ author.id }}">{{ author.full_name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+  {% for author in article.authors %}<a href="/authors/{{ author.id }}"{% if author.id in my_author_ids %} class="is-me" title="You"{% endif %}>{{ author.full_name }}</a>{% if author.id in my_author_ids %} <span class="you-badge">you</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
 </p>
 <dl>
   {% if article.journal %}<dt>Journal</dt><dd><a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% if article.year %} ({{ article.year }}){% endif %}</dd>{% endif %}
@@ -77,7 +77,7 @@
   <dt>DOI</dt>
   <dd>
     <a href="https://doi.org/{{ article.doi }}">{{ article.doi }}</a>
-    {% if not article.highlights %}
+    {% if not article.highlights and can_edit_notes %}
     <form method="post" action="/articles/{{ article.id }}/fetch-highlights" class="inline-form" hidden>
       <button type="submit" class="btn">Fetch Highlights</button>
     </form>
@@ -89,9 +89,16 @@
   {% if article.added_by %}<dt>Added by</dt><dd>{{ article.added_by }}</dd>{% endif %}
 </dl>
 
+{% if current_user and not can_edit_notes %}
+<p class="subtle notes-hint">Citation examples and highlights can be edited only by this paper's
+  authors. If you are one, confirm your author record on <a href="/me">My publications</a>.</p>
+{% endif %}
 <div class="article-notes-grid">
   <section class="citation-examples">
     <h2>Przykłady cytowania</h2>
+    {% if not can_edit_notes %}
+    {% if article.citation_examples %}<p class="readonly-notes">{{ article.citation_examples }}</p>{% else %}<p class="subtle">—</p>{% endif %}
+    {% else %}
     <form method="post" action="/articles/{{ article.id }}/citation-examples">
       <textarea name="citation_examples" rows="8"
                 placeholder="Dodaj tutaj 3-4 przykłady jak ten artykuł mógłby być cytowany w innych pracach">{{ article.citation_examples or "" }}</textarea>
@@ -100,9 +107,13 @@
         {% if citations_saved %}<span class="saved-note">✓ Zapisano przykłady cytowania.</span>{% endif %}
       </div>
     </form>
+    {% endif %}
   </section>
   <section class="citation-examples highlights-editor">
     <h2>Highlights</h2>
+    {% if not can_edit_notes %}
+    {% if article.highlights %}<p class="readonly-notes">{{ article.highlights }}</p>{% else %}<p class="subtle">—</p>{% endif %}
+    {% else %}
     <form method="post" action="/articles/{{ article.id }}/highlights">
       <textarea name="highlights" rows="8"
                 placeholder="Dodaj ręcznie Highlights, każdy w osobnej linii">{{ article.highlights or "" }}</textarea>
@@ -111,6 +122,7 @@
         {% if highlights_saved %}<span class="saved-note">✓ Zapisano Highlights.</span>{% endif %}
       </div>
     </form>
+    {% endif %}
   </section>
 </div>
 
@@ -164,6 +176,7 @@
     });
   })();
 </script>
+{% if current_user %}
 <section class="pdf-manage">
   <h2>PDF file</h2>
   <form action="/articles/{{ article.id }}/replace-pdf" method="post" enctype="multipart/form-data">
@@ -199,5 +212,6 @@
     <button type="submit" class="btn danger">Hide this publication</button>
   </form>
 </section>
+{% endif %}
 </div>
 {% endblock %}

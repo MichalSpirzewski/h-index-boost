@@ -9,14 +9,40 @@
 <body>
   <nav>
     <a href="/"><strong>RefBase</strong></a>
-    <a href="/upload">Add paper</a>
+    {% if current_user %}<a href="/upload">Add paper</a>{% endif %}
     <a href="/topics">Topics</a>
-    <a href="/projects">Projects</a>
+    {% if current_user %}<a href="/projects">Projects</a>{% endif %}
     <form action="/search" method="get" class="searchbox">
       <input type="search" name="q" placeholder="Search titles, abstracts &amp; PDFs&hellip;"
              value="{{ request.query_params.get('q', '') }}">
       <button type="submit">Search</button>
     </form>
+    <span class="nav-user">
+      {% if current_user %}
+        {%- if current_user.given_name and current_user.surname -%}
+          {%- set initials = current_user.given_name[:1] ~ current_user.surname[:1] -%}
+        {%- else -%}
+          {%- set initials = current_user.display_name.split()[:2] | map("first") | join -%}
+        {%- endif %}
+        <a href="/me" class="user-chip{% if request.url.path == '/me' %} active{% endif %}"
+           title="My publications ({{ current_user.username }})">
+          <span class="user-avatar" aria-hidden="true">{{ initials | upper }}</span>
+          <span class="user-name">{{ current_user.display_name }}</span>
+        </a>
+        <form action="/logout" method="post" class="inline-form">
+          <button type="submit" class="link-button">Log out</button>
+        </form>
+      {% elif request.url.path != "/login" %}
+        <a href="/login?next={{ (request.url.path ~ ('?' ~ request.url.query if request.url.query else ''))|urlencode }}" class="login-button"
+           title="Log in with your NCBJ account to add or change papers, topics and projects">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/>
+          </svg>
+          Log in
+        </a>
+      {% endif %}
+    </span>
   </nav>
   <main>
     {% block content %}{% endblock %}

@@ -69,6 +69,13 @@ Edit the hostname in both files first. `deploy/refbase.service` assumes the app
 lives in `/srv/refbase` with a virtualenv at `/srv/refbase/.venv` and runs as a
 `refbase` user; adjust if your layout differs.
 
+`requirements.txt` installs the login package from the private
+`git@code.cis.gov.pl:ncbj_apps/ncbj-login.git` repository over SSH, so the server
+needs read access to it before `pip install -r requirements.txt` will work: add the
+server's public key as a read-only **deploy key** on that repository (GitLab:
+Settings → Repository → Deploy keys), and check with
+`git ls-remote git@code.cis.gov.pl:ncbj_apps/ncbj-login.git`.
+
 ## What changes for the running app
 
 Nothing in the code — but two things about how it is started:

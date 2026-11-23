@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_export.html" as export with context %}
+{% block content %}
+<h1>My publications</h1>
+{% if saved %}<p class="saved-note">✓ Your author records are saved.</p>{% endif %}
+
+<section class="me-authors">
+  <h2>Which author records are you?</h2>
+  <p class="subtle">
+    Matched by surname and first initial
+    ({% for surname, given in name_used %}<strong>{{ given[:1] }}. {{ surname }}</strong>{% if not loop.last %} or {% endif %}{% endfor %}),
+    ignoring case and Polish letters. A match can be a namesake, so tick only the
+    records that really are you.
+  </p>
+  {% if candidates %}
+  <form method="post" action="/me/authors">
+    <ul class="me-candidates">
+      {% for author in candidates %}
+      {% set papers = papers_by_author.get(author.id, []) %}
+      <li>
+        <label>
+          <input type="checkbox" name="author_id" value="{{ author.id }}"
+                 {% if author.id in confirmed %}checked{% endif %}>
+          <a href="/authors/{{ author.id }}">{{ author.full_name }}</a>
+          {% if author.orcid %}<span class="subtle">ORCID {{ author.orcid }}</span>{% endif %}
+          <span class="subtle">· {{ papers | length }} paper{{ "" if papers | length == 1 else "s" }}</span>
+        </label>
+        {% if papers %}
+        <ul class="me-sample">
+          {% for article in papers[:3] %}
+          <li>{{ article.title or article.doi or "(untitled)" }}{% if article.year %} <span class="subtle">({{ article.year }})</span>{% endif %}</li>
+          {% endfor %}
+          {% if papers | length > 3 %}<li class="subtle">… and {{ papers | length - 3 }} more</li>{% endif %}
+        </ul>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <button type="submit">Save</button>
+  </form>
+  {% else %}
+  <p>No author in the library matches your name yet. Once a paper of yours is added,
+    its author record will be suggested here.</p>
+  {% endif %}
+</section>
+
+{% if confirmed %}
+<h2>Your papers ({{ articles | length }})</h2>
+{% if articles %}
+{{ export.export_form_open() }}
+{{ export.export_bar() }}
+<table class="wide-table">
+  <thead>
+    <tr>
+      {{ export.select_th() }}
+      <th>Title</th>
+      <th>Authors</th>
+      <th>Published</th>
+      <th>Journal</th>
+      <th>PDF</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for article in articles %}
+    <tr>
+      {{ export.select_td(article) }}
+      <td class="article-title-cell"><a href="/articles/{{ article.id }}">{{ article.title or article.doi or "(untitled)" }}</a></td>
+      <td>
+        {%- for author in article.authors -%}
+          {%- if author.id in my_author_ids %}<strong class="is-me" title="You">{{ author.full_name | short_name }}</strong>
+          {%- else %}<a href="/authors/{{ author.id }}">{{ author.full_name | short_name }}</a>{% endif -%}
+          {%- if not loop.last %}, {% endif -%}
+        {%- endfor -%}
+      </td>
+      <td class="date-cell">{{ article.published_date or article.year or "" }}</td>
+      <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
+      <td class="row-actions">
+        {% if article.pdf_path %}<a class="btn" href="/articles/{{ article.id }}/pdf" target="_blank" rel="noopener">View</a>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{{ export.export_form_close() }}
+{% else %}
+<p>Your confirmed author records have no visible papers.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

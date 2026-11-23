@@ -149,6 +149,12 @@ class Project(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(UTC)
     )
+    # The AD group whose members (nested membership included) may see this project
+    # and its documents. Required for new projects; NULL only on projects made
+    # before login existed, which stay visible to every logged-in user until one
+    # of them assigns a group. The name is a display copy of the group's CN.
+    ad_group_dn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ad_group_name: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     documents: Mapped[list[ProjectDocument]] = relationship(
         back_populates="local_project",
@@ -394,3 +400,78 @@ class SharedSelectionArticle(Base):
 
     selection: Mapped[SharedSelection] = relationship(back_populates="article_links")
     article: Mapped[Article] = relationship()
+
+
+class User(Base):
+    """What the directory said about someone the last time they logged in.
+
+    Not an account: there is no password here and no sign-up. A row is written
+    by every successful directory login and read on each request so the login
+    cookie only has to carry the username. Groups are a snapshot, refreshed on
+    the next login.
+    """
+
+    __tablename__ = "users"
+
+    username: Mapped[str] = mapped_column(String, primary_key=True)  # sAMAccountName, lower
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dn: Mapped[str] = mapped_column(Text, nullable=False)
+    given_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # AD givenName
+    surname: Mapped[str | None] = mapped_column(Text, nullable=True)  # AD sn
+    groups_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    first_login_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+    last_login_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+
+    @property
+    def groups(self) -> list[dict[str, str]]:
+        return json.loads(self.groups_json or "[]")
+
+
+class UserAuthor(Base):
+    """An author record the user has confirmed is them.
+
+    Name matching (surname + first initial, see app/people.py) only *suggests*
+    records — "M. Nowak" on a paper may be someone else — so nothing is linked
+    until the user ticks it on /me. Always points at a canonical author (merging
+    moves article links to the canonical row).
+    """
+
+    __tablename__ = "user_authors"
+
+    username: Mapped[str] = mapped_column(
+        ForeignKey("users.username", ondelete="CASCADE"), primary_key=True
+    )
+    author_id: Mapped[int] = mapped_column(
+        ForeignKey("authors.id", ondelete="CASCADE"), primary_key=True
+    )
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )
+
+
+class DepartmentMember(Base):
+    """A colleague listed in a department in AD (e.g. everyone with department=UZ3).
+
+    Refreshed from the directory whenever any member of that department logs in,
+    so authors can be recognised as department staff even if they never log in
+    themselves (see `people.department_authors`). Disabled accounts are kept,
+    flagged inactive: former staff still author the papers in the library.
+    """
+
+    __tablename__ = "department_members"
+
+    username: Mapped[str] = mapped_column(String, primary_key=True)  # sAMAccountName, lower
+    department: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    given_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    surname: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    refreshed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC)
+    )

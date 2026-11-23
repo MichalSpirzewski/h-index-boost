@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 
+from auth_helpers import TEST_GROUP_DN, TEST_USER
 from sqlalchemy import select
 from starlette.requests import Request
 
@@ -20,6 +21,8 @@ def _request(path: str, method: str = "GET") -> Request:
             "client": ("testclient", 50000),
             "server": ("testserver", 80),
             "root_path": "",
+            # What the login middleware puts there; these tests call routes directly.
+            "state": {"user": TEST_USER},
         }
     )
 
@@ -45,6 +48,7 @@ def test_create_project_then_upload_classified_document(client) -> None:
             "101000001",
             "A project-document workspace.",
             session,
+            ad_group_dn=TEST_GROUP_DN,
         )
         assert response.status_code == 303
         project = session.scalar(select(Project).where(Project.acronym == "ATLAS"))

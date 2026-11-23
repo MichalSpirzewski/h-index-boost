@@ -184,6 +184,14 @@ def init_db() -> None:
         ]
         if project_cols and "project_number" not in project_cols:
             conn.execute(text("ALTER TABLE projects ADD COLUMN project_number VARCHAR"))
+        for column in ("ad_group_dn", "ad_group_name"):
+            if project_cols and column not in project_cols:
+                conn.execute(text(f"ALTER TABLE projects ADD COLUMN {column} TEXT"))
+
+        user_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(users)"))]
+        for column in ("given_name", "surname"):
+            if user_cols and column not in user_cols:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {column} TEXT"))
         conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_projects_project_number "

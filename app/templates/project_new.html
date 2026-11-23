@@ -21,6 +21,17 @@
            placeholder="For example 101164616" required>
   </label>
   <label>
+    AD group
+    <select name="ad_group_dn" required>
+      <option value="">Choose the group whose members may see this project…</option>
+      {% for group in group_options %}
+      <option value="{{ group.dn }}" {% if group.dn == ad_group_dn %}selected{% endif %}>{{ group.name }}</option>
+      {% endfor %}
+    </select>
+    <span class="subtle">Only members of this group (directly or through a nested group) will
+      see the project and its documents. The list shows your own groups.</span>
+  </label>
+  <label>
     Description
     <textarea name="description" rows="5" placeholder="What is this project about?">{{ description or '' }}</textarea>
   </label>

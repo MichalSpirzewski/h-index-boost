@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+from auth_helpers import fake_directory, log_in
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
@@ -22,13 +23,14 @@ def crossref_message() -> dict:
 @pytest.fixture()
 def client(crossref_message, monkeypatch) -> TestClient:
     """TestClient on a clean database, with all external APIs mocked out."""
-    from app import db, ingest
+    from app import auth, db, ingest
     from app.main import app
     from app.models import (
         Article,
         ArticleAuthor,
         ArticleKeyword,
         Author,
+        DepartmentMember,
         Keyword,
         Project,
         ProjectDocument,
@@ -36,6 +38,8 @@ def client(crossref_message, monkeypatch) -> TestClient:
         SharedSelectionArticle,
         Topic,
         TopicKeyword,
+        User,
+        UserAuthor,
     )
 
     db.init_db()
@@ -57,6 +61,9 @@ def client(crossref_message, monkeypatch) -> TestClient:
             Author,
             Keyword,
             Topic,
+            UserAuthor,
+            User,
+            DepartmentMember,
         ):
             session.execute(delete(model))
         session.commit()
@@ -66,5 +73,16 @@ def client(crossref_message, monkeypatch) -> TestClient:
     monkeypatch.setattr(ingest, "fetch_crossref", lambda doi: crossref_message)
     monkeypatch.setattr(ingest, "fetch_semantic_scholar", lambda doi: None)
     monkeypatch.setattr(ingest, "fetch_unpaywall", lambda doi: None)
+    monkeypatch.setattr(auth.auth, "authenticate", fake_directory)
+
+    test_client = TestClient(app)
+    log_in(test_client)  # most tests exercise editing; `anon_client` covers visitors
+    return test_client
+
+
+@pytest.fixture()
+def anon_client(client) -> TestClient:
+    """A visitor who is not logged in (same clean database and mocks as `client`)."""
+    from app.main import app
 
     return TestClient(app)

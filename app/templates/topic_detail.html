@@ -9,6 +9,7 @@
 {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
 {% if saved %}<p class="saved-note">✓ Topic saved.</p>{% endif %}
 
+{% if current_user %}
 <section class="topic-editor">
   <details{% if error %} open{% endif %}>
     <summary><span class="panel-title">Rename or describe this topic</span></summary>
@@ -27,9 +28,14 @@
     </form>
   </details>
 </section>
+{% endif %}
 
 <h2>Keywords in this topic <span class="count-badge">{{ topic.keywords | length }}</span></h2>
-{% if topic.keywords %}
+{% if topic.keywords and not current_user %}
+<p class="chips">
+  {% for keyword in topic.keywords %}<a class="chip chip-link" href="/?keyword={{ keyword.id }}">{{ keyword.name }}</a>{% endfor %}
+</p>
+{% elif topic.keywords %}
 <form method="post" action="/topics/{{ topic.id }}/keywords" class="chips">
   {% for keyword in topic.keywords %}
   <button type="submit" name="keyword_id" value="{{ keyword.id }}"
@@ -38,9 +44,10 @@
   {% endfor %}
 </form>
 {% else %}
-<p>None yet. Click keywords below to classify them into this topic.</p>
+<p>None yet.{% if current_user %} Click keywords below to classify them into this topic.{% endif %}</p>
 {% endif %}
 
+{% if current_user %}
 <h2>All keywords <span class="count-badge">{{ keyword_picker | length }}</span></h2>
 <p class="sort">
   Click a keyword to put it in “{{ topic.name }}”; click a highlighted one to take
@@ -60,6 +67,7 @@
   {% endfor %}
 </form>
 <p class="no-matches" id="js-keyword-empty" hidden>No keyword matches that text.</p>
+{% endif %}
 
 <h2>Papers in this topic <span class="count-badge">{{ articles | length }}</span></h2>
 {% if articles %}

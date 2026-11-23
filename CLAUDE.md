@@ -4,7 +4,7 @@ Project brief for Claude Code. This file is the source of truth for scope, stack
 
 ## What this app is
 
-A self-hosted, no-login reference library for a research group (~30–40 people). Users add scientific papers (PDF upload and/or DOI/publisher link). The app extracts/fetches metadata via public APIs, stores everything in a shared database, and presents a browsable dashboard of articles, authors, and topics. Any article's PDF and BibTeX can be downloaded; multiple articles can be exported as one merged `.bib` file, or as one XML file importable into Microsoft Word's built-in bibliography manager (the group has both LaTeX and Word writers).
+A self-hosted reference library for a research group (~30–40 people), readable by anyone on the network; changing anything needs an institute (Active Directory) login. Users add scientific papers (PDF upload and/or DOI/publisher link). The app extracts/fetches metadata via public APIs, stores everything in a shared database, and presents a browsable dashboard of articles, authors, and topics. Any article's PDF and BibTeX can be downloaded; multiple articles can be exported as one merged `.bib` file, or as one XML file importable into Microsoft Word's built-in bibliography manager (the group has both LaTeX and Word writers).
 
 Think: minimal self-hosted Zotero for a group, without accounts.
 
@@ -26,6 +26,7 @@ Think: minimal self-hosted Zotero for a group, without accounts.
 | Frontend | Server-rendered Jinja2 templates + HTMX | no JS build step; small vanilla JS where unavoidable |
 | Fuzzy matching | `rapidfuzz` | soft duplicate warning for DOI-less papers |
 | File storage | local disk `data/pdfs/` | filename = normalized DOI (slashes → `_`) or UUID if no DOI |
+| Login | `ldap3` + Starlette `SessionMiddleware` (`itsdangerous`) | via the `institute-auth` package from the separate [ncbj-login](https://code.cis.gov.pl/ncbj_apps/ncbj-login) repo (`git@code.cis.gov.pl:ncbj_apps/ncbj-login.git`); see "Login" below |
 
 Rationale for HTMX over React: stateless server, ~40 users, read-heavy dashboard, and the maintainers are researchers, not frontend devs. Keep it boring.
 
@@ -103,9 +104,23 @@ Rate limiting: be polite to Crossref (single worker, sequential requests, mailto
 - `GET /authors/{id}` — author's articles, co-authors, keywords (`?keyword={id}` filters the table).
 - `GET /topics` + `POST /topics` — the topic overview (each topic's paper/keyword counts, plus the keywords in no topic yet) and topic creation. Names are UNIQUE; a clash is a 409 re-render, not a crash.
 - `GET /topics/{id}` — one topic: its papers, and a picker holding *every* keyword in the library. `POST /topics/{id}/keywords` with `keyword_id` toggles one keyword in or out — that single click is the whole classification UI. `POST /topics/{id}` renames/describes it, `POST /topics/{id}/delete` drops the grouping (keywords and papers survive).
-- `GET /upload` + `POST /api/ingest` — the hybrid upload form (file and/or link/DOI, optional "your name" remembered in localStorage and sent as `added_by`).
+- `GET /upload` + `POST /api/ingest` — the hybrid upload form (file and/or link/DOI). Login required; `added_by` is the logged-in user's directory `displayName`.
 - `POST /articles/{id}/replace-pdf` — upload a new PDF for an existing record (or a first one) and re-parse it: full text, keywords, abstract, affiliations, and — for a record without one — a DOI printed in the file, which then triggers the Crossref fetch. Only values the *replaced* PDF supplied are rewritten; Crossref-sourced metadata survives and keywords are never dropped.
 - `POST /articles/{id}/hide` / `POST /articles/{id}/unhide` / `GET /hidden` — soft delete, restore, and the list of what has been put away. No hard deletes anywhere, so hiding keeps the PDF, metadata and keyword links intact. The dashboard links to `/hidden` only while something is in it.
+- `GET /login` / `POST /login` / `POST /logout` — institute login (see "Login").
+- `GET /me` + `POST /me/authors` — "My publications": author records whose name matches the logged-in user (surname + first initial, case/diacritic-insensitive, `app/people.py`) are *suggested*; the user ticks which are really them (`UserAuthor`, canonical author ids only, and only ids that were offered). Confirmed records drive the paper list there and the "you" badge on author and article pages.
+- `POST /articles/{id}/citation-examples`, `/highlights`, `/fetch-highlights` — only the paper's own authors (a user who confirmed one of its author records, `people.is_author_of`) may edit; anyone else gets 403 and sees the notes read-only.
+- `GET /projects`, `GET /projects/{id}`, `POST /projects` (requires `ad_group_dn`, one of the creator's own groups), `POST /projects/{id}/group` (re-assign; only to one of the caller's groups), `GET /project-documents/{id}/file` — all login-only and filtered by AD group; a project outside the user's groups is a 404.
+
+## Login
+
+- Users log in with their NCBJ Active Directory account (`username@CENTRUM`, simple bind on `ldap://10.170.10.2` — the DC offers no TLS, so the bind is unencrypted until IT installs a certificate; flip `REFBASE_LDAP_STARTTLS`/use `ldaps://` then). Config: `REFBASE_LDAP_URL`, `_DOMAIN`, `_BASE_DN`, `_STARTTLS`, `_CA_FILE`; `REFBASE_SESSION_SECRET` (falls back to `data/session_secret`); `REFBASE_COOKIE_SECURE` behind HTTPS.
+- **Reading is open; writing needs a login.** `app/auth.py:needs_login` sends every non-GET request to the login unless its path is in `_OPEN_POSTS` (the export downloads only), so a new write route is protected by default. GETs need a login only under `/upload`, `/projects`, `/project-documents`. `/api/v1` is exempt (own `X-API-Key`). Share-link creation needs a login; viewing a share does not.
+- Templates get `current_user` (a `DirectoryUser` or None) and hide edit controls behind `{% if current_user %}`. Macros that need it must be imported `with context`.
+- At login the user's details and **nested** AD groups (`LDAP_MATCHING_RULE_IN_CHAIN`) are stored in the `users` table; the cookie holds only the username. A login lasts 14 days from the login itself (not sliding), so group changes are picked up at least that often.
+- Projects belong to one AD group (`Project.ad_group_dn`). Only members see the project or its documents. Projects with no group (pre-login ones) are visible to every logged-in user until someone assigns one.
+- Never let an empty password reach the directory: AD treats it as an anonymous bind and reports success.
+- Department roster: at each login the module also reads everyone with the same AD `department` (e.g. `UZ3`, disabled accounts kept as inactive) and `DbUserStore` replaces that department's rows in `department_members`; a failed read stores nothing. `people.department_authors(session, dept)` maps canonical authors to department members (roster name match + confirmed `/me` links). Groundwork only — no page uses it yet.
 
 BibTeX generation: cite key = `firstauthorlastnameYEARfirstword` (deduplicate with `a`,`b` suffixes within an export). Escape special characters; keep Unicode (biblatex-friendly) but escape `{`, `}`, `%`, `&`, `#`.
 
@@ -132,15 +147,17 @@ Word export: many people in the group write in Microsoft Word, not LaTeX. Word h
     site_export.py     # selection → self-contained offline page + PDFs (ZIP)
     templating.py      # Jinja env shared by main.py and site_export.py
     affiliations.py    # affiliation normalisation / NCNR grouping
+    auth.py            # RefBase login policy, users-table store, project visibility
+    people.py          # user ↔ author matching (surname + initial) and confirmed links
     templates/         # Jinja2 + HTMX partials
     static/
   data/                # sqlite file + pdfs/ (gitignored)
   tests/
   ```
 - Type hints everywhere; `ruff` for lint/format; `pytest` for tests.
-- Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping, JSON→Word XML field mapping (author name splitting, source-type mapping, well-formed output), topic grouping (a paper counts once per topic however many of its keywords match) and the legacy topics→keywords table migration. Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
+- Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping, JSON→Word XML field mapping (author name splitting, source-type mapping, well-formed output), topic grouping (a paper counts once per topic however many of its keywords match), the legacy topics→keywords table migration, and the login policy (visitor read-only, project visibility by AD group). Tests log in through a fake directory (`tests/auth_helpers.py`); `client` is logged in, `anon_client` is not. Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
 - Keep external API calls isolated in `ingest.py` behind small functions so they're mockable.
-- No auth, no user table, no sessions. `added_by` is a plain string.
+- Login policy lives in `app/auth.py`; login mechanics in the separate `ncbj-login` repo (package `institute_auth`, shared with other NCBJ apps; pinned by commit in `requirements.txt`). Change the login there, then bump the pin here — never copy its code into RefBase. `added_by` stays a plain string (the user's display name).
 - Don't add dependencies beyond the stack table without asking.
 
 ## Milestones

@@ -726,3 +726,56 @@ td.subtle, .date-cell.subtle { font-size: 0.9em; }
     margin-right: 0;
   }
 }
+
+/* --- login --------------------------------------------------------------- */
+.nav-user { display: flex; gap: 0.5rem; align-items: center; font-size: 0.9rem; color: #555; }
+.nav-user .inline-form { margin-left: 0; }
+.link-button { background: none; border: none; padding: 0; color: #0a5; cursor: pointer; font: inherit; }
+.link-button:hover { text-decoration: underline; }
+.login-panel { max-width: 22rem; }
+.login-panel label { display: block; margin: 0.75rem 0; }
+.login-panel input[type="text"], .login-panel input[type="password"] {
+  display: block; width: 100%; padding: 0.4rem; box-sizing: border-box;
+}
+.login-panel .error { color: #b00020; }
+.readonly-notes { white-space: pre-line; }
+
+/* --- my publications ------------------------------------------------------ */
+.you-badge { display: inline-block; background: #0a5; color: #fff; border-radius: 0.6rem;
+  padding: 0 0.45rem; font-size: 0.75rem; font-weight: 600; vertical-align: middle; }
+.is-me { font-weight: 600; }
+.me-candidates { list-style: none; padding: 0; }
+.me-candidates > li { margin-bottom: 0.9rem; }
+.me-sample { margin: 0.25rem 0 0 1.6rem; font-size: 0.9rem; color: #444; }
+
+/* --- logged-in user chip (top right) → /me -------------------------------- */
+.user-chip {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.2rem 0.75rem 0.2rem 0.2rem;
+  border: 1px solid #0a5; border-radius: 999px;
+  background: #f1faf5; color: #064 !important;
+  font-weight: 600; text-decoration: none;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.user-chip:hover { background: #dff3e8; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.user-chip:focus-visible { outline: 2px solid #0a5; outline-offset: 2px; }
+.user-chip.active { background: #0a5; color: #fff !important; }
+.user-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.7rem; height: 1.7rem; border-radius: 50%;
+  background: #0a5; color: #fff; font-size: 0.75rem; letter-spacing: 0.02em;
+}
+.user-chip.active .user-avatar { background: #fff; color: #0a5; }
+.nav-user .link-button { color: #6b7785; font-size: 0.85rem; }
+
+/* --- "Log in" for visitors: the most prominent control in the bar --------- */
+.login-button {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 1rem; border-radius: 999px;
+  background: #0a5; border: 1px solid #0a5; color: #fff !important;
+  font-weight: 600; text-decoration: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.login-button:hover { background: #08884a; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2); }
+.login-button:focus-visible { outline: 2px solid #0a5; outline-offset: 2px; }

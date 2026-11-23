@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "_export.html" as export %}
+{% import "_export.html" as export with context %}
 {#- Kept intentionally parallel to the author publications page so this can
     evolve independently when journals gain more metadata later. -#}
 {% macro sort_th(key, label) %}
@@ -64,10 +64,14 @@
       <td class="date-cell subtle" title="First appeared online">{{ article.online_date or "" }}</td>
       <td><span class="status status-{{ article.status }}">{{ article.status }}</span></td>
       <td class="cite-first-cell">
+        {% if current_user %}
         <button type="submit" formaction="/articles/{{ article.id }}/cite-first"
                 class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
                 aria-pressed="{{ 'true' if article.cite_first else 'false' }}"
                 title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">!</button>
+        {% elif article.cite_first %}
+        <span class="cite-first-btn cite-first-active" title="Marked as the one to cite first">!</span>
+        {% endif %}
       </td>
       <td class="row-actions">
         {% if article.pdf_path %}

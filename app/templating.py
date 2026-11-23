@@ -6,11 +6,25 @@ the FastAPI app (which imports it back).
 
 from pathlib import Path
 
+from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from institute_auth import TEMPLATES_DIR as AUTH_TEMPLATES_DIR
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+def _auth_context(request: Request) -> dict:
+    """`current_user` in every served page: the logged-in `DirectoryUser` or None.
+
+    Pages rendered without a request (the offline site export) never see it,
+    so anything guarded by `{% if current_user %}` is left out of them.
+    """
+    return {"current_user": getattr(request.state, "user", None)}
+
+
+templates = Jinja2Templates(
+    directory=[TEMPLATES_DIR, AUTH_TEMPLATES_DIR], context_processors=[_auth_context]
+)
 
 
 def short_author_name(full_name: str) -> str:

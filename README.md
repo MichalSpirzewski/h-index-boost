@@ -154,6 +154,42 @@ FastAPI publishes the interactive OpenAPI documentation at `/docs`. The API is
 open for local development when `REFBASE_API_KEY` is unset. When it is set,
 clients must send the same value in the `X-API-Key` header.
 
+## Login
+
+Anyone on the network can browse, search and export. Adding or changing anything
+(uploads, topics, highlights, hiding papers, share links) and everything about
+projects needs a login with your NCBJ account — the same username and password
+as for Windows and e-mail.
+
+- Projects are tied to one Active Directory group, chosen when the project is
+  created from the creator's own groups. Only members of that group (directly or
+  through nested groups) see the project and its documents.
+- A login lasts 14 days. Group membership is read at login, so after being added
+  to a group in AD, log out and in again to see its projects.
+- The NCBJ domain controller offers no TLS, so the password travels unencrypted
+  between the RefBase server and the domain controller. Keep RefBase on the
+  internal network. Once IT installs a certificate on the DC, set
+  `REFBASE_LDAP_STARTTLS=true` (or switch to `ldaps://`) — no code change.
+
+Check the directory connection without the web app:
+
+```bash
+source ~/miniforge3/bin/activate refbase
+REFBASE_LDAP_URL=ldap://10.170.10.2 REFBASE_LDAP_DOMAIN=CENTRUM \
+REFBASE_LDAP_BASE_DN=DC=ncbj,DC=gov,DC=pl python -m institute_auth --prefix REFBASE_LDAP_
+```
+
+**My publications** (`/me`, once logged in) suggests the author records whose
+name matches yours — same surname and first initial, ignoring case and Polish
+letters, so "M. Spirzewski" and "Michal Spirzewski" both count. Tick the ones that
+are really you (a match can be a namesake); your papers are then listed there and
+marked "you" on author and paper pages.
+
+The login mechanics are a separate, reusable package in the
+ncbj-login repository (`git@code.cis.gov.pl:ncbj_apps/ncbj-login.git`,
+installed from `requirements.txt`); RefBase's rules (what
+needs a login, project visibility) are in `app/auth.py`.
+
 ## Running the app
 
 ```bash

@@ -11,12 +11,26 @@
              value="{{ project_number_value or '' }}" required>
       <button class="btn" type="submit">Update number</button>
     </form>
+    <form class="project-number-form" action="/projects/{{ project.id }}/group" method="post">
+      <label for="project-group">AD group</label>
+      <select id="project-group" name="ad_group_dn" required>
+        {% if not project.ad_group_dn %}<option value="">Not set: every logged-in user can see this project</option>{% endif %}
+        {% set ns = namespace(listed=false) %}
+        {% for group in group_options %}
+        {% if project.ad_group_dn and group.dn|lower == project.ad_group_dn|lower %}{% set ns.listed = true %}{% endif %}
+        <option value="{{ group.dn }}" {% if project.ad_group_dn and group.dn|lower == project.ad_group_dn|lower %}selected{% endif %}>{{ group.name }}</option>
+        {% endfor %}
+        {% if project.ad_group_dn and not ns.listed %}<option value="" selected>{{ project.ad_group_name }}</option>{% endif %}
+      </select>
+      <button class="btn" type="submit">Change group</button>
+    </form>
     {% if project.description %}<p>{{ project.description }}</p>{% endif %}
   </div>
   <a class="btn btn-primary" href="#add-project-document">Add document</a>
 </div>
 
 {% if project_number_updated %}<div class="banner ok">Project number updated.</div>{% endif %}
+{% if group_updated %}<div class="banner ok">Project group updated.</div>{% endif %}
 {% if error %}<div class="banner warn">{{ error }}</div>{% endif %}
 
 {% macro document_table(documents, empty_message) %}

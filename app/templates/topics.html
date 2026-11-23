@@ -10,6 +10,7 @@
 
 {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
 
+{% if current_user %}
 <section class="topic-create">
   <h2>New topic</h2>
   <form method="post" action="/topics" class="topic-form">
@@ -24,6 +25,7 @@
     <button type="submit">Create topic</button>
   </form>
 </section>
+{% endif %}
 
 <h2>All topics <span class="count-badge">{{ topic_stats | length }}</span></h2>
 {% if topic_stats %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% import "_export.html" as export %}
+{% import "_export.html" as export with context %}
 {#- Sortable publications header: click to sort ascending, click the active one to flip. -#}
 {% macro sort_th(key, label) %}
   {%- set active = (sort == key) -%}
@@ -11,7 +11,7 @@
   </th>
 {% endmacro %}
 {% block content %}
-<h1>{{ author.full_name }}</h1>
+<h1>{{ author.full_name }}{% if is_me %} <span class="you-badge" title="You confirmed this author record on My publications">you</span>{% endif %}</h1>
 {% if author.orcid %}<p><a href="https://orcid.org/{{ author.orcid }}">{{ author.orcid }}</a></p>{% endif %}
 {% if affiliations %}
 <ul class="affiliations">
@@ -32,6 +32,7 @@
         {% if contact.meeting_link %}<li>🎥 <a href="{{ contact.meeting_link }}" target="_blank" rel="noopener">Join meeting</a></li>{% endif %}
       </ul>
       {% endif %}
+      {% if current_user %}
       <details class="contact-editor"{% if not has_contact %} open{% endif %}>
         <summary>{{ "Edit contact details" if has_contact else "Add contact details" }}</summary>
         <form method="post" action="/authors/{{ author.id }}/contact" class="contact-form">
@@ -40,6 +41,7 @@
           <button type="submit">Save contact</button>
         </form>
       </details>
+      {% endif %}
     </div>
   </details>
 </section>
@@ -97,10 +99,14 @@
       <td>{% if article.journal %}<a href="/journals/{{ article.journal | urlencode }}">{{ article.journal }}</a>{% endif %}</td>
       <td><span class="status status-{{ article.status }}">{{ article.status }}</span></td>
       <td class="cite-first-cell">
+        {% if current_user %}
         <button type="submit" formaction="/articles/{{ article.id }}/cite-first"
                 class="cite-first-btn{% if article.cite_first %} cite-first-active{% endif %}"
                 aria-pressed="{{ 'true' if article.cite_first else 'false' }}"
                 title="{% if article.cite_first %}Marked as the one to cite first — click to unmark{% else %}Mark as the one to cite first{% endif %}">!</button>
+        {% elif article.cite_first %}
+        <span class="cite-first-btn cite-first-active" title="Marked as the one to cite first">!</span>
+        {% endif %}
       </td>
       <td class="row-actions">
         {% if article.pdf_path %}

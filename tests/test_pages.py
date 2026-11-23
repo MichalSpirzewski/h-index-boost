@@ -2,6 +2,8 @@ import copy
 import io
 import zipfile
 
+from auth_helpers import claim_authorship
+
 
 def below_panels(page: str) -> str:
     """The dashboard from its first heading down: the article tables.
@@ -311,6 +313,7 @@ def test_article_page_can_save_citation_examples(client) -> None:
     article_id = client.post(
         "/api/ingest", data={"doi": "10.9999/citation-examples"}
     ).json()["article_id"]
+    claim_authorship(article_id)
 
     page = client.get(f"/articles/{article_id}").text
     assert (
@@ -337,6 +340,7 @@ def test_article_page_can_fetch_publisher_highlights_once(
     article_id = client.post(
         "/api/ingest", data={"doi": "10.9999/highlights"}
     ).json()["article_id"]
+    claim_authorship(article_id)
     page = client.get(f"/articles/{article_id}").text
     assert f'action="/articles/{article_id}/fetch-highlights"' in page
 
@@ -363,6 +367,7 @@ def test_article_page_can_save_highlights_manually(client) -> None:
     article_id = client.post(
         "/api/ingest", data={"doi": "10.1038/nphys1170"}
     ).json()["article_id"]
+    claim_authorship(article_id)
     highlights = "First manual highlight.\nSecond manual highlight."
 
     response = client.post(
