@@ -9,6 +9,6 @@ rapidfuzz
 ldap3
 itsdangerous
 # NCBJ Active Directory login — separate repo, shared with other NCBJ apps.
-# Pinned to a commit so a change there never reaches RefBase unannounced; bump
-# the ref deliberately. To work on both at once: pip install -e ~/git/ncbj-login
-institute-auth @ git+ssh://git@github.com/MichalSpirzewski/ncbj_login.git@2c9eb7cb0274fc87c14c70750d38cbaec7fa9a12
+# Pinned to a release tag so a change there never reaches RefBase unannounced;
+# bump the tag deliberately (tags are immutable releases of ncbj-login). To work on both at once: pip install -e ~/git/ncbj-login
+institute-auth @ git+ssh://git@github.com/MichalSpirzewski/ncbj_login.git@v0.2.0

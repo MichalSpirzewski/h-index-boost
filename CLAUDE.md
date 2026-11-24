@@ -157,7 +157,7 @@ Word export: many people in the group write in Microsoft Word, not LaTeX. Word h
 - Type hints everywhere; `ruff` for lint/format; `pytest` for tests.
 - Test priorities: DOI normalization/extraction (regex edge cases), dedup behavior, BibTeX escaping and cite-key dedup, JSON→BibTeX field mapping, JSON→Word XML field mapping (author name splitting, source-type mapping, well-formed output), topic grouping (a paper counts once per topic however many of its keywords match), the legacy topics→keywords table migration, and the login policy (visitor read-only, project visibility by AD group). Tests log in through a fake directory (`tests/auth_helpers.py`); `client` is logged in, `anon_client` is not. Mock all external APIs in tests (use stored sample Crossref JSON fixtures).
 - Keep external API calls isolated in `ingest.py` behind small functions so they're mockable.
-- Login policy lives in `app/auth.py`; login mechanics in the separate `ncbj-login` repo (package `institute_auth`, shared with other NCBJ apps; pinned by commit in `requirements.txt`). Change the login there, then bump the pin here — never copy its code into RefBase. `added_by` stays a plain string (the user's display name).
+- Login policy lives in `app/auth.py`; login mechanics in the separate `ncbj-login` repo (package `institute_auth`, shared with other NCBJ apps; pinned to a release tag, e.g. `@v0.2.0`, in `requirements.txt`). Change the login there, tag a release, then bump the tag here — never copy its code into RefBase. `added_by` stays a plain string (the user's display name).
 - Don't add dependencies beyond the stack table without asking.
 
 ## Milestones
